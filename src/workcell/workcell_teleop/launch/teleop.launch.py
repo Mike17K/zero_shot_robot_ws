@@ -35,6 +35,27 @@ def generate_launch_description():
         description="Each conveyor slider's range is +/- this, rad/s",
     )
 
+    # Gripper/Spawn Box logic (which objects are graspable, the per-object
+    # runtime joint, gz spawning) lives entirely in group_a_bringup's
+    # gripper_manager.py node, one instance per robot - this UI is just a
+    # service client (see teleop_gui.py's module docstring), so none of that
+    # needs configuring here.
+    # Default spawn point (also editable live from the Spawn Box panel's own
+    # X/Y/Z spinboxes - these are just the seed values): on top of
+    # conveyor_package_infeed's footprint (xyz="-1.00 1.5 0.0", yaw=90deg,
+    # length=4.0 in workcell_bringup/launch/workcell.launch.py's
+    # conveyors_config), at the belt's far end - away from the robot/
+    # pedestal at world origin. After the belt's 90deg yaw, its local travel
+    # axis (+X) maps to world_y = spawn_y(1.5) + local_x, so larger local_x
+    # (up to ~1.93 at the last roller) is larger world_y, farther from the
+    # robot at y=0; Y=3.2 sits near that far end with a safety margin off
+    # the very edge. X stays centered on the belt's width (matches the
+    # belt's own spawn_x, -1.00). Z is a short drop above its z-top=0.4
+    # conveying surface. Keep in sync with that file by hand.
+    spawn_x_arg = DeclareLaunchArgument("spawn_x", default_value="-1.00", description="Spawn Box default X position, meters")
+    spawn_y_arg = DeclareLaunchArgument("spawn_y", default_value="3.2", description="Spawn Box default Y position, meters")
+    spawn_z_arg = DeclareLaunchArgument("spawn_z", default_value="0.55", description="Spawn Box default Z position, meters (above conveyor_package_infeed's z-top=0.4, for a short drop)")
+
     teleop_node = Node(
         package="workcell_teleop",
         executable="teleop_gui",
@@ -45,6 +66,9 @@ def generate_launch_description():
             "joint_limits_package": LaunchConfiguration("joint_limits_package"),
             "conveyor_namespaces": LaunchConfiguration("conveyor_namespaces"),
             "conveyor_max_speed": LaunchConfiguration("conveyor_max_speed"),
+            "spawn_x": LaunchConfiguration("spawn_x"),
+            "spawn_y": LaunchConfiguration("spawn_y"),
+            "spawn_z": LaunchConfiguration("spawn_z"),
         }],
     )
 
@@ -54,5 +78,8 @@ def generate_launch_description():
         joint_limits_package_arg,
         conveyor_namespaces_arg,
         conveyor_max_speed_arg,
+        spawn_x_arg,
+        spawn_y_arg,
+        spawn_z_arg,
         teleop_node,
     ])

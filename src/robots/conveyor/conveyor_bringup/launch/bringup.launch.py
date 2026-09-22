@@ -23,6 +23,14 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args.append(DeclareLaunchArgument("side_rail_height", default_value="0.03", description="Side guide-rail height ABOVE the conveying surface, meters - keep low on pallet belts (so the robot can still lift a pallet off from above), tall on a loose-item infeed belt (so items don't fall off the sides)"))
     args.append(DeclareLaunchArgument("belt_speed", default_value="6.0", description="Target roller angular velocity, rad/s (bootstrap-published once the belt controller is active)"))
     args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for this belt's nodes and topics, including its own /<namespace>/tf"))
+    # workcell.launch.py starts every conveyor (and the robot) together, and
+    # each instance's own controller spawner used to fire at the same fixed
+    # 4.0s delay - meaning all of them called switch_controller on their
+    # respective controller_managers at the exact same instant, which is real
+    # contention (see controllers_spawner's own comment below). Exposed here
+    # so workcell.launch.py can stagger each conveyor instance's spawn time
+    # instead of them all colliding.
+    args.append(DeclareLaunchArgument("controllers_spawn_delay", default_value="4.0", description="Seconds after this belt's own nodes start before its controller spawner fires - stagger this per-instance from the caller to avoid every belt (and the robot) hitting switch_controller at the same moment"))
     return args
 
 
@@ -93,6 +101,7 @@ def launch_setup(context):
     side_rail_height = LaunchConfiguration("side_rail_height").perform(context)
     belt_speed = LaunchConfiguration("belt_speed").perform(context)
     namespace = LaunchConfiguration("namespace").perform(context)
+    controllers_spawn_delay = float(LaunchConfiguration("controllers_spawn_delay").perform(context))
 
     num_rollers = _num_rollers(float(length), float(roller_radius), float(roller_gap))
     joint_names = [f"roller_{i}_joint" for i in range(1, num_rollers + 1)]
@@ -189,6 +198,19 @@ def launch_setup(context):
             f"/{namespace}/controller_manager",
             "--controller-manager-timeout",
             "30",
+            # See group_a_bringup/launch/bringup.launch.py's matching
+            # comment: --controller-manager-timeout only bounds waiting for
+            # the service to exist, not the actual activation. On a machine
+            # falling back to CPU rendering (no GPU passthrough into the
+            # container), 5 controller_managers (this belt + the other 3 +
+            # the robot) all racing to activate around the same moment can
+            # occasionally blow through ros2_control's 5s default
+            # switch_controller wait and kill the spawner outright.
+            # --switch-timeout is spawner's own documented knob for exactly
+            # this ("switching cannot be performed immediately, e.g. paused
+            # simulations at startup").
+            "--switch-timeout",
+            "20",
         ],
         parameters=[sim_time_param],
     )
@@ -222,10 +244,14 @@ def launch_setup(context):
         controller_manager_node,
         gazebo_spawn_robot,
         TimerAction(
-            period=4.0,
+            period=controllers_spawn_delay,
             actions=[controllers_spawner],
         ),
-        TimerAction(period=6.0, actions=[belt_speed_relay]),
+        # Kept at the same +2.0s offset after the controller spawner this
+        # always had (was hardcoded period=6.0 = old fixed 4.0 delay + 2.0) -
+        # belt_speed_relay just needs to run after belt_velocity_controller
+        # is active, regardless of what controllers_spawn_delay is set to.
+        TimerAction(period=controllers_spawn_delay + 2.0, actions=[belt_speed_relay]),
     ]
 
 

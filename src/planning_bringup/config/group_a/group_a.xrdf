@@ -27,7 +27,7 @@ cspace:
   acceleration_limits: [6.0, 6.0, 6.0, 6.0, 6.0, 6.0]
   jerk_limits: [200.0, 200.0, 200.0, 200.0, 200.0, 200.0]
 
-tool_frames: ["gp_tool0"]
+tool_frames: ["gripper_tcp"]
 
 collision:
   geometry: "combined_robot_collision_spheres"
@@ -40,13 +40,16 @@ collision:
     gp_link_5: 0.02
     gp_link_6: 0.02
     gp_tool0: 0.01
+    gripper_plate_link: 0.02
     camera_link: 0.01
+    gripper_tcp: 0.0
 
 self_collision:
   geometry: "combined_robot_collision_spheres"
   buffer_distance:
     gp_link_1: 0.07
     gp_tool0: 0.05
+    gripper_plate_link: 0.02
   ignore:
     # Adjacent-link ignores, matching combined_system.srdf.xacro's
     # disable_collisions entries.
@@ -57,7 +60,16 @@ self_collision:
     gp_link_4: ["gp_link_5"]
     gp_link_5: ["gp_link_6"]
     gp_link_6: ["gp_tool0"]
-    camera_link: ["gp_tool0", "gp_link_6"]
+    gp_tool0: ["gripper_plate_link"]
+    gripper_plate_link:
+      [
+        "camera_link",
+        "gripper_tcp",
+        "suction_cup_1_link", "suction_cup_2_link", "suction_cup_3_link",
+        "suction_cup_4_link", "suction_cup_5_link", "suction_cup_6_link",
+        "suction_cup_7_link", "suction_cup_8_link", "suction_cup_9_link",
+        "suction_cup_10_link", "suction_cup_11_link", "suction_cup_12_link",
+      ]
 
 geometry:
   combined_robot_collision_spheres:
@@ -120,4 +132,24 @@ geometry:
         - center: [0.175, 0.0, 0.0]
           radius: 0.09
       gp_tool0:
+      # 2x3 grid covering the gripper_plate_link footprint (0.30 x 0.40 x
+      # 0.02, see group_a_description/urdf/group_a_macro.xacro) plus the
+      # suction cups' protrusion (up to z=0.05 in the plate's own frame) -
+      # one generous radius per sphere rather than a sphere per cup (12 more
+      # spheres would be well within this coverage anyway for planning
+      # purposes; tighten against real geometry if that stops being true).
+      gripper_plate_link:
+        - center: [-0.075, -0.133, 0.025]
+          radius: 0.09
+        - center: [0.075, -0.133, 0.025]
+          radius: 0.09
+        - center: [-0.075, 0.0, 0.025]
+          radius: 0.09
+        - center: [0.075, 0.0, 0.025]
+          radius: 0.09
+        - center: [-0.075, 0.133, 0.025]
+          radius: 0.09
+        - center: [0.075, 0.133, 0.025]
+          radius: 0.09
       camera_link:
+      gripper_tcp:

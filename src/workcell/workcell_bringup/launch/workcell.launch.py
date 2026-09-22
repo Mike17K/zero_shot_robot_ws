@@ -114,6 +114,7 @@ def generate_launch_description():
                             "sim_gazebo": LaunchConfiguration("sim_gazebo"),
                             "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
                             "namespace": robot["name"],
+                            "world_name": "default",
                         }.items(),
                     ),
                 ]
@@ -181,15 +182,25 @@ def generate_launch_description():
     # without the rail being in the way. Tall on package_infeed - it's
     # carrying loose, unpalletized items with nothing else holding them in
     # place, so it needs actual containment walls.
+    # controllers_spawn_delay: staggered 0.5s apart across the 4 belts, and
+    # offset from robot_1's own fixed 4.0s (see group_a_bringup/launch/
+    # bringup.launch.py) - all 5 controller_managers used to fire their
+    # switch_controller call at the exact same instant (every bringup.
+    # launch.py hardcoded the same 4.0s delay), which was real startup
+    # contention on a machine without GPU passthrough into the container
+    # (CPU rendering fallback). See conveyor_bringup/launch/bringup.launch.py
+    # and group_a_bringup/launch/bringup.launch.py's own comments on this -
+    # also paired there with a raised --switch-timeout as a second line of
+    # defense for whatever contention staggering doesn't fully avoid.
     conveyors_config = [
-        {"name": "conveyor_pallet_left", "width": "1.1", "length": "5.76", "height": "0.45", "xyz": "2.88 1.3 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01"},
-        {"name": "conveyor_pallet_right", "width": "1.1", "length": "5.76", "height": "0.45", "xyz": "2.88 -1.3 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01"},
-        {"name": "conveyor_pallet_mid", "width": "1.1", "length": "4.96", "height": "0.45", "xyz": "3.28 0.0 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01"},
+        {"name": "conveyor_pallet_left", "width": "1.1", "length": "5.76", "height": "0.45", "xyz": "2.88 1.3 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01", "controllers_spawn_delay": "4.5"},
+        {"name": "conveyor_pallet_right", "width": "1.1", "length": "5.76", "height": "0.45", "xyz": "2.88 -1.3 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01", "controllers_spawn_delay": "5.0"},
+        {"name": "conveyor_pallet_mid", "width": "1.1", "length": "4.96", "height": "0.45", "xyz": "3.28 0.0 0.0", "rpy": "0.0 0.0 0.0", "side_rail_height": "0.01", "controllers_spawn_delay": "5.5"},
         # xyz/length here are intentionally NOT auto-rescaled with the rest of
         # this layout - left exactly as manually placed, per direct
         # instruction. If you reposition pallet_mid/the pedestal later, this
         # one won't automatically stay clear of them - recheck by hand.
-        {"name": "conveyor_package_infeed", "width": "0.5", "length": "4.0", "height": "0.4", "xyz": "-1.00 1.5 0.0", "rpy": "0.0 0.0 1.5708", "side_rail_height": "0.12"},
+        {"name": "conveyor_package_infeed", "width": "0.5", "length": "4.0", "height": "0.4", "xyz": "-1.00 1.5 0.0", "rpy": "0.0 0.0 1.5708", "side_rail_height": "0.12", "controllers_spawn_delay": "6.0"},
     ]
 
     pkg_conveyor_bringup_share = get_package_share_directory("conveyor_bringup")
@@ -218,6 +229,7 @@ def generate_launch_description():
                             "roller_radius": conveyor.get("roller_radius", "0.05"),
                             "roller_gap": conveyor.get("roller_gap", "0.005"),
                             "side_rail_height": conveyor.get("side_rail_height", "0.03"),
+                            "controllers_spawn_delay": conveyor.get("controllers_spawn_delay", "4.0"),
                             "sim_gazebo": LaunchConfiguration("sim_gazebo"),
                             "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
                             "namespace": conveyor["name"],

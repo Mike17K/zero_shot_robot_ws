@@ -49,54 +49,17 @@ reset_to_top_left() {
 
 reset_to_top_left
 
-# configuration broadcasting
-echo "Enabling broadcasting for all panels..."
+# paste_cmd "bash scripts/shell.sh" && enter
+# sleep 5
+
 broadcast_on
+paste_cmd "bash scripts/shell.sh" && enter
+sleep 2
 paste_cmd "$GLOBAL_CMD && clear"
 enter
 broadcast_off
 
-# --- PANEL 1 (top-left): Camera Input Node ---
-echo "Configuring Panel 1..."
-paste_cmd "bash scripts/shell.sh" && enter
-sleep 5
-# paste_cmd 'ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardware:=false'
-# enter
-
-# --- PANEL 2 (top-right) ---
-reset_to_top_left
-move_right
-paste_cmd "bash scripts/shell.sh" && enter
-
-# --- PANEL 3 (middle-right) ---
-reset_to_top_left
-move_right
-move_down
-paste_cmd "bash scripts/shell.sh" && enter
-# paste_cmd "ros2 launch workcell_bringup rviz.launch.py rviz_namespace:=robot_1"
-
-# --- PANEL 5 (bottom-right): Teleop UI ---
-reset_to_top_left
-move_right
-move_down
-move_down
-paste_cmd "bash scripts/shell.sh" && enter
-
-# --- PANEL 4 (bottom-left) ---
-reset_to_top_left
-move_down
-paste_cmd "bash scripts/shell.sh" && enter
-# paste_cmd "ros2 run tf2_ros static_transform_publisher 0.0 0.0 0.0 0.0 0.0 0.0 1.0 map group_a/odom"
-
-
 # configuration broadcasting
-echo "Enabling broadcasting for all panels..."
-broadcast_on
-paste_cmd "$GLOBAL_CMD && clear"
-enter
-broadcast_off
-
-reset_to_top_left
 paste_cmd 'source install/setup.bash && ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardware:=false'
 
 reset_to_top_left

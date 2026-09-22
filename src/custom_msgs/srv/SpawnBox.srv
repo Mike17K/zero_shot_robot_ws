@@ -1,0 +1,16 @@
+# Spawn a new box of the given size at the given world-frame position into
+# gripper_manager's round-robin slot pool - see gripper_manager.py and
+# group_a_description/urdf/group_a_macro.xacro's gripper_slot comment for
+# why a fixed slot pool exists at all (DetachableJoint's own child_model is
+# a static string baked into the URDF at build time, not retargetable at
+# runtime).
+
+float64 width
+float64 depth
+float64 height
+float64 x
+float64 y
+float64 z
+---
+bool success
+string message
