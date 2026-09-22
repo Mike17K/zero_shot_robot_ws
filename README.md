@@ -6,6 +6,10 @@ ROS 2 (Jazzy) workspace for zero-shot manipulation on a floor-mounted Yaskawa GP
 
 All development happens inside a container built via the [Isaac ROS CLI](https://nvidia-isaac-ros.github.io/concepts/dev_env/index.html) — there is no host ROS install. Design rationale (why nvblox runs in static TSDF mode, why the workspace lives inside the container) is in [docs/STRUCTURAL_DESISIONS.md](docs/STRUCTURAL_DESISIONS.md).
 
+<img src="docs/robots_setup.png">
+
+The cell: a GP70L on a pedestal between two long pallet-queue conveyors and a shorter middle lane (`pallet_left`/`pallet_right`/`pallet_mid`), plus a raised `package_infeed` belt for loose items — see `src/robots/conveyor` and `workcell_bringup/launch/workcell.launch.py`'s layout comment for the actual dimensions/clearances.
+
 ## Quickstart
 
 ```bash
@@ -49,6 +53,7 @@ this will open the terminator with the commands ready to run
 | `src/robots/group_a`          | Robot description + MoveIt config for group_a (GP70L arm + Orbbec camera)              |
 | `src/robots/conveyor`         | Parametric, actuated conveyor belt description + bringup, spawned per-instance         |
 | `src/robots/motoman_ros2_support_packages` | Submodule (sparse), [Yaskawa-Global/motoman_ros2_support_packages](https://github.com/Yaskawa-Global/motoman_ros2_support_packages) — GP70L arm description |
+| `src/workcell/workcell_teleop` | PyQt teleop UI: robot joint-position sliders + conveyor speed sliders                 |
 | `src/planning_bringup`        | cuMotion planning launch/config                                                        |
 | `src/vision`                  | nvblox launch/config                                                                   |
 | `src/isaac_ros_cumotion_fork` | Submodule, [Mike17K/isaac_ros_cumotion](https://github.com/Mike17K/isaac_ros_cumotion) |
@@ -61,6 +66,8 @@ this will open the terminator with the commands ready to run
 - `docker login nvcr.io` with an [NGC API key](https://org.ngc.nvidia.com/account/api-keys) (username: `$oauthtoken`)
 - `isaac_ros_common` pinned to the `3.2-15` release
 
+Inside the container, `workcell_teleop` needs `python3-pyqt5` — `make rosdeps` should pull it in via the package's `exec_depend`, but if it doesn't resolve, `sudo apt install python3-pyqt5` by hand.
+
 ## Entry points (`scripts/`)
 
 | Script                  | Purpose                                                                           |
@@ -70,7 +77,7 @@ this will open the terminator with the commands ready to run
 | `entrypoint.sh`         | Container entrypoint, runs `make`                                                 |
 | `setup_workspace.sh`    | First-boot dependency install inside the container                                |
 | `setup_host.sh`         | One-off host setup (NVIDIA container toolkit + isaac-ros-cli)                     |
-| `launch/launch_ws.sh`   | Opens a Terminator layout and launches workcell / cuMotion / RViz / nvblox panels |
+| `launch/launch_ws.sh`   | Opens a Terminator layout and launches workcell / cuMotion / RViz / nvblox / teleop panels |
 
 ## Build & run (inside the container)
 
@@ -87,6 +94,7 @@ ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardwa
 ros2 launch planning_bringup cumotion.launch.py
 ros2 launch vision nvblox.launch.py
 ros2 launch workcell_bringup rviz.launch.py rviz_namespace:=robot_1
+ros2 launch workcell_teleop teleop.launch.py   # joint sliders + conveyor speed sliders
 ```
 
 ## References

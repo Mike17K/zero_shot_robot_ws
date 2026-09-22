@@ -1,7 +1,7 @@
 import tempfile
 import yaml
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import UnlessCondition, IfCondition
 from launch_ros.actions import Node
@@ -193,27 +193,28 @@ def launch_setup(context):
         parameters=[sim_time_param],
     )
 
-    # ── 5. Belt-on bootstrap ─────────────────────────────────────────────────
+    # ── 5. Belt speed relay ──────────────────────────────────────────────────
     # forward_command_controller/ForwardCommandController has no command
     # timeout (unlike diff_drive_controller) - it holds the last velocity it
-    # received indefinitely, so a single one-shot publish is enough to start
-    # the belt spinning and keep it spinning. `-w 1` waits for
-    # belt_velocity_controller's own subscription to match before publishing,
-    # robust against spawner/discovery timing (same idiom as
-    # agv_bringup/launch/bringup.launch.py's odom_bootstrap). One belt_speed
-    # value per roller (num_rollers, not a fixed count) - all rollers get the
-    # same command, so they all turn the same way at the same rate.
-    belt_on_bootstrap = ExecuteProcess(
-        cmd=[
-            "ros2", "topic", "pub",
-            "-w", "1",
-            "--once",
-            f"/{namespace}/belt_velocity_controller/commands",
-            "std_msgs/msg/Float64MultiArray",
-            "{data: [" + ", ".join([belt_speed] * num_rollers) + "]}",
-        ],
+    # received indefinitely, so publishing once is enough to start the belt
+    # spinning and keep it spinning. belt_velocity_controller/commands needs
+    # one value per roller (num_rollers, not a fixed count), which nothing
+    # outside this launch file knows - belt_speed_relay is a small persistent
+    # node (not a one-shot `ros2 topic pub`) that's told num_rollers here and
+    # fans a plain std_msgs/Float64 on ~/target_speed out to the full-size
+    # array, so anything - a teleop UI (see workcell_teleop), a test script -
+    # can drive this belt without knowing its roller count. It also publishes
+    # `belt_speed` itself once at startup, replacing what used to be a
+    # separate one-shot bootstrap.
+    belt_speed_relay = Node(
+        package="conveyor_bringup",
+        executable="belt_speed_relay.py",
         output="screen",
-        name="belt_on_bootstrap",
+        namespace=namespace,
+        parameters=[
+            {"num_rollers": num_rollers, "initial_speed": float(belt_speed)},
+            sim_time_param,
+        ],
     )
 
     return [
@@ -224,7 +225,7 @@ def launch_setup(context):
             period=4.0,
             actions=[controllers_spawner],
         ),
-        TimerAction(period=6.0, actions=[belt_on_bootstrap]),
+        TimerAction(period=6.0, actions=[belt_speed_relay]),
     ]
 
 
