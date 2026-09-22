@@ -32,14 +32,22 @@
   ros_type_name: "geometry_msgs/msg/PoseArray"
   gz_type_name: "gz.msgs.Pose_V"
   direction: GZ_TO_ROS
+  
+# ── Suction gripper ───────────────────────────────────────────────────────────
+# gripper_manager.py needs exactly two bridged topics, independent of how many
+# objects exist (per-object work goes through gz services via the gz CLI):
+#  1. every dynamic entity's pose, one world-wide stream, names preserved in
+#     TFMessage.child_frame_id
+#  2. the shared detach topic every runtime-installed DetachableJoint listens on
 
-# PosePublisher's tf output is deliberately NOT bridged into ROS (it used to
-# be, straight onto the global "/tf" - removed). robot_state_publisher is
-# this robot's own tf source (base_link -> {gp_*, camera_*}), scoped to
-# /<namespace>/tf via bringup.launch.py's explicit remap; bridging
-# PosePublisher's ground-truth pose data onto that same topic (or worse, onto
-# the global /tf, as this used to) would be a second, conflicting source for
-# the same frames. The /pose bridge above is unaffected (independent gz
-# topic, ground-truth data still available for whoever wants it later) - same
-# reasoning as agv_bringup/config/gz_bridge.yaml in the sibling
-# internal_delivery_system_ws workspace.
+# - ros_topic_name: "/$(var namespace)/gz/dynamic_poses"
+#   gz_topic_name: "/world/$(var world_name)/dynamic_pose/info"
+#   ros_type_name: "tf2_msgs/msg/TFMessage"
+#   gz_type_name: "gz.msgs.Pose_V"
+#   direction: GZ_TO_ROS
+
+# - ros_topic_name: "/$(var namespace)/gripper/detach_all"
+#   gz_topic_name: "/grasp/$(var namespace)/detach_all"
+#   ros_type_name: "std_msgs/msg/Empty"
+#   gz_type_name: "gz.msgs.Empty"
+#   direction: ROS_TO_GZ

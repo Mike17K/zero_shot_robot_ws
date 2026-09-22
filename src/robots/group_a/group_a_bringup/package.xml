@@ -8,6 +8,9 @@
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- srv/SpawnBox.srv, generated for gripper_manager.py's spawn_box
+       service - see CMakeLists.txt's rosidl_generate_interfaces() call. -->
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>group_a_description</depend>
   <depend>robot_state_publisher</depend>
@@ -15,7 +18,19 @@
   <depend>ros_gz_sim</depend>
   <depend>ros_gz_bridge</depend>
   <depend>xacro</depend>
-
+  <!-- gripper_manager.py's own runtime deps - see scripts/gripper_manager.py.
+       gz_transport_vendor/gz_msgs_vendor supply the gz.transport13 / gz.msgs10
+       PYTHON bindings it uses to talk to Gazebo directly (pose tracking,
+       spawning, and installing a per-object DetachableJoint at runtime) -
+       that direct path, rather than ros_gz_bridge, is what lets the number of
+       graspable objects be unbounded. -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>gz_transport_vendor</exec_depend>
+  <exec_depend>gz_msgs_vendor</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>

@@ -1,6 +1,78 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+    <!-- ── Suction gripper ──────────────────────────────────────────────────────
+         Top-level (not nested) macros - same reason as
+         conveyor_description/urdf/conveyor_macro.xacro's roller macros:
+         xacro registers macros globally by name, so defining these INSIDE
+         group_a_robot's body would re-declare them on every expansion.
+
+         A flat rectangular plate mounted on gp_tool0 with a 3x4 grid of
+         suction cups protruding from its outer face, all fixed (no per-cup
+         actuation/attach-detach physics here - this is geometry only, a
+         picking behavior would need something like Gazebo's DetachableJoint
+         plugin toggled per-cup from a grasp controller, not built yet).
+         The plate's own Z axis is NOT rotated relative to gp_tool0's, so
+         "the direction the cups protrude" and "the direction gp_tool0's own
+         Z axis points" are the same axis - camera_optical_joint below reuses
+         that fact directly (see its own comment).
+    ──────────────────────────────────────────────────────────────────────── -->
+    <xacro:macro name="suction_cup" params="idx x y z radius length">
+        <link name="suction_cup_${idx}_link">
+            <visual>
+                <geometry>
+                    <cylinder radius="${radius}" length="${length}" />
+                </geometry>
+                <material name="cup_black">
+                    <color rgba="0.05 0.05 0.05 1.0" />
+                </material>
+            </visual>
+            <collision>
+                <geometry>
+                    <cylinder radius="${radius}" length="${length}" />
+                </geometry>
+            </collision>
+            <inertial>
+                <!-- Tiny/negligible next to the plate or the arm - solid
+                     cylinder inertia, m=0.01kg, kept non-zero/non-singular. -->
+                <mass value="0.01" />
+                <inertia
+                    ixx="${0.01 * (3.0 * radius * radius + length * length) / 12.0}"
+                    ixy="0.0" ixz="0.0"
+                    iyy="${0.01 * (3.0 * radius * radius + length * length) / 12.0}"
+                    iyz="0.0"
+                    izz="${0.01 * 0.5 * radius * radius}" />
+            </inertial>
+        </link>
+        <joint name="suction_cup_${idx}_joint" type="fixed">
+            <parent link="gripper_plate_link" />
+            <child link="suction_cup_${idx}_link" />
+            <origin xyz="${x} ${y} ${z}" rpy="0 0 0" />
+        </joint>
+    </xacro:macro>
+
+    <!-- Recursive: emits suction cup idx's link/joint, then idx+1, ..., up
+         to and including `count`, laying them out on a cols x (count/cols)
+         grid (row = (idx-1)//cols, col = (idx-1)%cols) - xacro has no
+         native for-loop over XML content, so this is the same recursive-
+         macro pattern conveyor_macro.xacro's conveyor_roller_chain uses for
+         its (also runtime-computed) roller count. -->
+    <xacro:macro name="suction_cup_grid"
+        params="idx count cols col0_x row0_y col_spacing row_spacing cup_z radius length">
+        <xacro:if value="${idx &lt;= count}">
+            <xacro:property name="grid_row" value="${(idx - 1) // cols}" />
+            <xacro:property name="grid_col" value="${(idx - 1) % cols}" />
+            <xacro:suction_cup idx="${idx}"
+                x="${col0_x + grid_col * col_spacing}"
+                y="${row0_y + grid_row * row_spacing}"
+                z="${cup_z}" radius="${radius}" length="${length}" />
+            <xacro:suction_cup_grid idx="${idx + 1}" count="${count}" cols="${cols}"
+                col0_x="${col0_x}" row0_y="${row0_y}"
+                col_spacing="${col_spacing}" row_spacing="${row_spacing}"
+                cup_z="${cup_z}" radius="${radius}" length="${length}" />
+        </xacro:if>
+    </xacro:macro>
+
     <xacro:macro name="group_a_robot"
         params="
         parent
@@ -112,12 +184,106 @@
             </joint>
         </ros2_control>
 
-        <!-- === Camera at GP70L end-effector ─────────────────────────────────────
-             Link names: camera_link   (bare, literal)
-             Parent:     gp_tool0      (bare, literal - GP70L's own
-                          ROS-Industrial "all-zeros tool frame", same role
-                          ur_tool0 played before)
+        <!-- === Suction gripper at GP70L end-effector ─────────────────────────────
+             gripper_plate_link: bare, literal name, parent gp_tool0 (GP70L's
+             own ROS-Industrial "all-zeros tool frame", same role ur_tool0
+             played before). No rotation on this mount joint - the plate's Z
+             axis IS gp_tool0's Z axis (the tool's own approach direction),
+             which is what lets camera_optical_joint below reuse the exact
+             same rotation the old tool0-mounted camera used and still end
+             up "facing the same way as the suction cups", just moved to the
+             plate's edge instead of centered on tool0.
         ──────────────────────────────────────────────────────────────────────── -->
+        <xacro:property name="gripper_plate_width" value="0.30" /> <!-- X, 3 cup columns -->
+        <xacro:property name="gripper_plate_length" value="0.40" /> <!-- Y, 4 cup rows -->
+        <xacro:property name="gripper_plate_thickness" value="0.02" /> <!-- Z -->
+        <xacro:property name="cup_cols" value="3" />
+        <xacro:property name="cup_rows" value="4" />
+        <xacro:property name="cup_spacing" value="0.08" />
+        <xacro:property name="cup_radius" value="0.02" />
+        <xacro:property name="cup_length" value="0.03" />
+        <xacro:property name="cup_col0_x" value="${-(cup_cols - 1) * cup_spacing / 2.0}" />
+        <xacro:property name="cup_row0_y" value="${-(cup_rows - 1) * cup_spacing / 2.0}" />
+        <!-- Cups protrude from the plate's outer (tool-facing) side, z=thickness,
+             so a cup's own center sits half its length further out. -->
+        <xacro:property name="cup_z" value="${gripper_plate_thickness + cup_length / 2.0}" />
+
+        <link name="gripper_plate_link">
+            <visual>
+                <origin xyz="0 0 ${gripper_plate_thickness / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${gripper_plate_width} ${gripper_plate_length} ${gripper_plate_thickness}" />
+                </geometry>
+                <material name="dark_grey">
+                    <color rgba="0.15 0.15 0.15 1.0" />
+                </material>
+            </visual>
+            <collision>
+                <origin xyz="0 0 ${gripper_plate_thickness / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${gripper_plate_width} ${gripper_plate_length} ${gripper_plate_thickness}" />
+                </geometry>
+            </collision>
+            <inertial>
+                <mass value="1.5" />
+                <origin xyz="0 0 ${gripper_plate_thickness / 2.0}" rpy="0 0 0" />
+                <inertia
+                    ixx="${1.5 * (gripper_plate_length * gripper_plate_length + gripper_plate_thickness * gripper_plate_thickness) / 12.0}"
+                    ixy="0.0" ixz="0.0"
+                    iyy="${1.5 * (gripper_plate_width * gripper_plate_width + gripper_plate_thickness * gripper_plate_thickness) / 12.0}"
+                    iyz="0.0"
+                    izz="${1.5 * (gripper_plate_width * gripper_plate_width + gripper_plate_length * gripper_plate_length) / 12.0}" />
+            </inertial>
+        </link>
+
+        <joint name="gripper_mount_joint" type="fixed">
+            <parent link="gp_tool0" />
+            <child link="gripper_plate_link" />
+            <origin xyz="0 0 0" rpy="0 0 0" />
+        </joint>
+
+        <!-- 3x4 = 12 suction cups, cols along X, rows along Y - see
+             suction_cup_grid's own comment above. -->
+        <xacro:suction_cup_grid idx="1" count="${cup_cols * cup_rows}" cols="${cup_cols}"
+            col0_x="${cup_col0_x}" row0_y="${cup_row0_y}"
+            col_spacing="${cup_spacing}" row_spacing="${cup_spacing}"
+            cup_z="${cup_z}" radius="${cup_radius}" length="${cup_length}" />
+
+        <!-- Tool-center-point: massless reference frame at the cup grid's
+             own tip (centered in X/Y, at the cups' outer face) - what
+             planning should actually target, since gp_tool0 now sits behind
+             the whole plate+cup stack rather than at the gripper's working
+             point. Used as planning_bringup/config/group_a/group_a.xrdf's
+             tool_frames and combined_system.srdf.xacro's "manipulator"
+             group's chain tip_link. -->
+        <link name="gripper_tcp" />
+        <joint name="gripper_tcp_joint" type="fixed">
+            <parent link="gripper_plate_link" />
+            <child link="gripper_tcp" />
+            <origin xyz="0 0 ${cup_z + cup_length / 2.0}" rpy="0 0 0" />
+        </joint>
+
+        <!-- === Camera at the gripper's edge ───────────────────────────────────
+             Off to one edge (max +Y, clear of the cup grid) and centered
+             across the width (X=0) - "in the edge of the gripper, head down
+             facing like the suction cups": same Z (protrusion) direction as
+             the cups, just not in the middle of the array.
+
+             camera_joint yaws the camera body 90° about Z first: the camera
+             box is 0.040 x 0.095 (not square), and mounted at its default
+             orientation its LONG (0.095) side would face along plate-Y -
+             straight toward the cup grid's last row, with no room left to
+             clear it inside a 0.40-long plate (checked: -2.5cm of actual
+             overlap). Yawing about Z doesn't touch the Z axis itself, so it
+             doesn't affect "which way the camera looks" (still gp_tool0's
+             own Z, same as the cups) - it only swaps which box dimension
+             faces the edge, so the SHORT (0.040) side does instead, needing
+             far less edge clearance. -->
+        <xacro:property name="cup_last_row_edge_y" value="${-cup_row0_y + cup_radius}" />
+        <xacro:property name="camera_gap" value="0.02" /> <!-- clearance from the nearest cup -->
+        <xacro:property name="camera_y" value="${cup_last_row_edge_y + camera_gap + 0.040 / 2.0}" />
+        <xacro:property name="camera_z" value="${gripper_plate_thickness + 0.020}" />
+
         <link name="camera_link">
             <visual>
                 <geometry>
@@ -140,12 +306,16 @@
         </link>
 
         <joint name="camera_joint" type="fixed">
-            <parent link="gp_tool0" />
+            <parent link="gripper_plate_link" />
             <child link="camera_link" />
-            <origin xyz="0 0 0.020" rpy="0 0 0" />
+            <origin xyz="0 ${camera_y} ${camera_z}" rpy="0 0 ${pi/2}" />
         </joint>
 
-        <!-- Optical frame -->
+        <!-- Optical frame - identical rotation to before: camera_link's own
+             axes are still unrotated relative to its parent's (gp_tool0
+             before, gripper_plate_link now), and that parent's Z axis is
+             still gp_tool0's own Z axis either way, so this still points
+             the optical Z axis the same direction as the suction cups. -->
         <link name="camera_optical_frame" />
         <joint name="camera_optical_joint" type="fixed">
             <parent link="camera_link" />
@@ -164,6 +334,17 @@
                     <parameters>${simulation_controllers}</parameters>
                 </plugin>
             </gazebo>
+
+            <!-- No grasping plugin is declared here on purpose. A
+                 DetachableJoint declared in this URDF would have to name its
+                 child model at BUILD time, which caps grasping at a fixed set
+                 of pre-named objects and - because DetachableJoint defaults to
+                 attached - welds each of those objects to this arm the instant
+                 it spawns, wherever it happens to be in the world. Instead
+                 group_a_bringup's gripper_manager.py installs a DetachableJoint
+                 onto this model at RUNTIME, per object, via Gazebo's
+                 /world/<world>/entity/system/add service - unlimited objects,
+                 nothing baked in here. See that node's docstring. -->
 
             <gazebo>
                 <plugin filename="libgz-sim-pose-publisher-system.so"

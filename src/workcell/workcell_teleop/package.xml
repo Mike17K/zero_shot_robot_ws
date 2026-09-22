@@ -3,15 +3,21 @@
 <package format="3">
   <name>workcell_teleop</name>
   <version>0.0.1</version>
-  <description>PyQt teleoperation UI: robot joint-position sliders and conveyor speed sliders</description>
+  <description>PyQt teleoperation UI: robot joint-position sliders, gripper on/off, conveyor speed sliders, and spawning a sized box onto the conveyor</description>
   <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>trajectory_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>builtin_interfaces</depend>
   <depend>ament_index_python</depend>
+  <!-- gripper/spawn_box service clients (see teleop_gui.py's module
+       docstring/set_gripper()/spawn_box()) - this UI is a thin client of
+       group_a_bringup's gripper_manager.py node; group_a_bringup/srv/
+       SpawnBox.srv's generated Python bindings live in that package. -->
+  <depend>group_a_bringup</depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <!-- Not a hard build dependency (joint_limits.yaml is read from its share

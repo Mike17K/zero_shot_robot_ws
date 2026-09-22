@@ -20,7 +20,12 @@ group_a_moveit_config package. The original file is located at:
 <robot xmlns:xacro="http://ros.org/xacro" name="combined_system">
 
     <group name="manipulator">
-        <chain base_link="gp_base_link" tip_link="gp_tool0" />
+        <!-- tip_link is the gripper's own TCP (see group_a_macro.xacro's
+             gripper_tcp frame), not gp_tool0 - planning should target where
+             the suction cups actually work, not the bare flange behind them.
+             The chain still runs through gp_tool0/gripper_plate_link/the
+             cups on the way there (all connected by fixed joints). -->
+        <chain base_link="gp_base_link" tip_link="gripper_tcp" />
     </group>
     <!--VIRTUAL
     JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame
@@ -39,9 +44,6 @@ group_a_moveit_config package. The original file is located at:
     <disable_collisions link1="gp_link_6" link2="gp_flange" reason="Adjacent" />
     <disable_collisions link1="gp_flange" link2="gp_tool0" reason="Adjacent" />
     <disable_collisions link1="gp_link_6" link2="gp_tool0" reason="Never" />
-    <disable_collisions link1="camera_link" link2="gp_link_6" reason="Adjacent" />
-    <disable_collisions link1="camera_link" link2="gp_flange" reason="Adjacent" />
-    <disable_collisions link1="camera_link" link2="gp_tool0" reason="Adjacent" />
     <!-- Non-adjacent but geometrically close pairs on a bent arm - kept
          disabled to match the previous UR-based SRDF's intent (avoid
          false-positive self-collision on the wrist/forearm links closest to
@@ -49,5 +51,33 @@ group_a_moveit_config package. The original file is located at:
          be too permissive for GP70L's actual link geometry. -->
     <disable_collisions link1="gp_link_3" link2="gp_link_5" reason="Never" />
     <disable_collisions link1="gp_link_4" link2="gp_link_6" reason="Never" />
+
+    <!-- Suction gripper (see group_a_description/urdf/group_a_macro.xacro):
+         gripper_plate_link sits right where camera_link used to be mounted
+         (directly on gp_tool0), so it takes over those entries; camera_link
+         itself moved one joint further out (gripper_plate_link -> camera_link
+         instead of gp_tool0 -> camera_link directly), so it's disabled
+         against the plate, not the arm links, now. Each suction cup only
+         needs disabling against the plate it's mounted on - they don't touch
+         each other (0.08m spacing, 0.04m cup diameter) or the arm, so
+         MoveIt's normal collision check handles those pairs correctly
+         without needing 66 more explicit entries. -->
+    <disable_collisions link1="gripper_plate_link" link2="gp_tool0" reason="Adjacent" />
+    <disable_collisions link1="gripper_plate_link" link2="gp_flange" reason="Never" />
+    <disable_collisions link1="gripper_plate_link" link2="gp_link_6" reason="Never" />
+    <disable_collisions link1="camera_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_1_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_2_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_3_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_4_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_5_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_6_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_7_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_8_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_9_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_10_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_11_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="suction_cup_12_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="gripper_tcp" link2="gripper_plate_link" reason="Adjacent" />
 
 </robot>

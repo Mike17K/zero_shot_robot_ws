@@ -23,6 +23,15 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args.append(DeclareLaunchArgument("xyz", default_value="0.0 0.0 0.0", description="Robot spawn position"))
     args.append(DeclareLaunchArgument("rpy", default_value="0.0 0.0 0.0", description="Robot spawn orientation"))
     args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for this robot's nodes and topics, including its own /<namespace>/tf"))
+    # Suction footprint, in the gripper TCP frame - what gripper_manager.py
+    # counts as "in front of the plate and close enough to suck up". Defaults
+    # cover the 0.30x0.40m plate (group_a_macro.xacro) plus a small margin.
+    # Nothing here caps HOW MANY objects can be grasped or spawned.
+    args.append(DeclareLaunchArgument("suction_half_width", default_value="0.17", description="Half-width (X) of the suction footprint in the gripper TCP frame, meters"))
+    args.append(DeclareLaunchArgument("suction_half_length", default_value="0.22", description="Half-length (Y) of the suction footprint in the gripper TCP frame, meters"))
+    args.append(DeclareLaunchArgument("suction_reach", default_value="0.06", description="How far in front of the cups (+Z in the TCP frame) an object can be and still be sucked up, meters"))
+    args.append(DeclareLaunchArgument("graspable_prefixes", default_value="['box']", description="YAML list of model-name prefixes gripper_manager treats as graspable - keeps the arm's own links and the conveyor rollers out of consideration"))
+    args.append(DeclareLaunchArgument("world_name", default_value="default", description="Gazebo world name (see workcell_description/worlds/workcell_world.sdf's <world name=...>) - used by gripper_manager's spawn_box for the /world/<name>/create and /world/<name>/remove services"))
     return args
 
 
@@ -47,6 +56,10 @@ def launch_setup(context):
     xyz = LaunchConfiguration("xyz").perform(context)
     rpy = LaunchConfiguration("rpy").perform(context)
     namespace = LaunchConfiguration("namespace").perform(context)
+    suction_half_width = LaunchConfiguration("suction_half_width").perform(context)
+    suction_half_length = LaunchConfiguration("suction_half_length").perform(context)
+    suction_reach = LaunchConfiguration("suction_reach").perform(context)
+    world_name = LaunchConfiguration("world_name").perform(context)
 
     # ── Controllers YAML (namespace-substituted) ─────────────────────────────────
     # DUBUGGING TIP! we need to keep the parameter file in an instance! it creates the tmp file when we call evaluate() on it
@@ -233,6 +246,20 @@ def launch_setup(context):
             f"/{namespace}/controller_manager",
             "--controller-manager-timeout",
             "30",
+            # --controller-manager-timeout only bounds waiting for the
+            # controller_manager SERVICE to exist - the actual activation
+            # (switch_controller) has its own separate, shorter internal
+            # wait (5s default in ros2_control's spawner). workcell.launch.py
+            # starts this robot and all 4 conveyors together, each with its
+            # own controller_manager racing to activate around the same
+            # moment - on a machine falling back to CPU rendering (no GPU
+            # passthrough into the container), that's enough contention to
+            # occasionally blow through the 5s default and kill the spawner
+            # outright. --switch-timeout is spawner's own documented knob for
+            # exactly this ("switching cannot be performed immediately, e.g.
+            # paused simulations at startup") - it waits instead of dying.
+            "--switch-timeout",
+            "20",
         ],
         parameters=[sim_time_param],
     )
@@ -273,6 +300,44 @@ def launch_setup(context):
         ],
     )
 
+    # ── 7. Gripper manager ───────────────────────────────────────────────────
+    # Decides what this arm grasps and makes Gazebo hold it, by installing a
+    # DetachableJoint per object at RUNTIME (Gazebo's entity/system/add
+    # service) instead of anything being declared in the URDF - which is what
+    # makes the object count unbounded. See scripts/gripper_manager.py's own
+    # docstring. Gazebo-only: it talks to gz services that don't exist
+    # outside sim. robot_model_name is left empty so the node falls back to
+    # its own namespace, which is exactly the name workcell.launch.py spawns
+    # this robot's Gazebo model as.
+    gripper_manager_node = Node(
+        package="group_a_bringup",
+        executable="gripper_manager.py",
+        output="screen",
+        namespace=namespace,
+        parameters=[
+            {
+                # These are declared in gripper_manager.py with Python
+                # float/list defaults, which fixes each one's ROS parameter
+                # TYPE. LaunchConfiguration(...).perform(context) above always
+                # returns a plain string, and handing a raw string straight
+                # into this dict makes launch_ros set a STRING-typed override
+                # - a real type mismatch (InvalidParameterTypeException),
+                # confirmed against a live run, not a hypothetical. Cast to
+                # the node's actual expected type here.
+                "world_name": world_name,
+                "suction_half_width": float(suction_half_width),
+                "suction_half_length": float(suction_half_length),
+                "suction_reach": float(suction_reach),
+                # Already a YAML list literal, so let launch_ros resolve and
+                # type it rather than .perform()-ing it into a string.
+                "graspable_prefixes": LaunchConfiguration("graspable_prefixes"),
+            },
+            sim_time_param,
+        ],
+        remappings=tf_remappings,
+        condition=IfCondition(LaunchConfiguration("sim_gazebo")),
+    )
+
     return [
         robot_state_publisher,
         controller_manager_node,
@@ -280,6 +345,7 @@ def launch_setup(context):
         gz_default_bridge,
         depth_to_pointcloud_container,
         move_group_node,
+        gripper_manager_node,
         TimerAction(
             period=4.0,
             actions=[motion_default_active_controllers_spawner],
