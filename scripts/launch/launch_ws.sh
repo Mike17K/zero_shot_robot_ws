@@ -3,10 +3,11 @@
 ROS_DOMAIN_ID=40
 ROS_DISTRO="jazzy"
 WS=${PWD}
+CONTAINER_WS="/workspaces/isaac_ros-dev"
 DEFAULT_DELAY=0.05
 DEFAULT_LONG_DELAY=0.2
-# Η εντολή που προετοιμάζει κάθε νέο terminal panel
-GLOBAL_CMD="cd $WS && source /opt/ros/$ROS_DISTRO/setup.bash && source $WS/install/setup.bash && source $WS/.venv/bin/activate && export PYTHONPATH=\$PYTHONPATH:$WS/external && export ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
+# Η εντολή που προετοιμάζει κάθε νέο terminal panel (runs INSIDE the container)
+GLOBAL_CMD="cd $CONTAINER_WS && source /opt/ros/$ROS_DISTRO/setup.bash && source $CONTAINER_WS/install/setup.bash && source $CONTAINER_WS/.venv/bin/activate && export PYTHONPATH=\$PYTHONPATH:$CONTAINER_WS/external && export ROS_DOMAIN_ID=$ROS_DOMAIN_ID"
 LAYOUT_NAME="GazeboLayout"
 TERMINATOR_CONFIG="$WS/scripts/config/terminator_config"
 

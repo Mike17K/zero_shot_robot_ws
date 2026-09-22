@@ -19,13 +19,10 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args = []
     args.append(DeclareLaunchArgument("use_fake_hardware", default_value="true", description="Use mock_components/GenericSystem (true) or real hardware drivers (false)"))
     args.append(DeclareLaunchArgument("sim_gazebo", default_value="false", description="Switch to true if launching inside a Gazebo Simulation environment"))
-    args.append(DeclareLaunchArgument("lift_type", default_value="ur_620", description="Ewellix model type"))
-    args.append(DeclareLaunchArgument("ur_type", default_value="ur10", description="UR robot type"))
     args.append(DeclareLaunchArgument("parent_link", default_value="world", description="Parent link in the workcell"))
     args.append(DeclareLaunchArgument("xyz", default_value="0.0 0.0 0.0", description="Robot spawn position"))
     args.append(DeclareLaunchArgument("rpy", default_value="0.0 0.0 0.0", description="Robot spawn orientation"))
-    args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for the robot tf frames ,topics and nodes"))
-    args.append(DeclareLaunchArgument("tf_prefix", default_value="", description="Prefix for all TF frames after namespace is applied"))
+    args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for this robot's nodes and topics, including its own /<namespace>/tf"))
     return args
 
 
@@ -46,13 +43,10 @@ def launch_setup(context):
     # ── Runtime values ───────────────────────────────────────────────────────
     use_fake_hardware = LaunchConfiguration("use_fake_hardware").perform(context)
     sim_gazebo = LaunchConfiguration("sim_gazebo").perform(context)
-    lift_type = LaunchConfiguration("lift_type").perform(context)
-    ur_type = LaunchConfiguration("ur_type").perform(context)
     parent_link = LaunchConfiguration("parent_link").perform(context)
     xyz = LaunchConfiguration("xyz").perform(context)
     rpy = LaunchConfiguration("rpy").perform(context)
     namespace = LaunchConfiguration("namespace").perform(context)
-    tf_prefix = LaunchConfiguration("tf_prefix").perform(context)
 
     # ── Controllers YAML (namespace-substituted) ─────────────────────────────────
     # DUBUGGING TIP! we need to keep the parameter file in an instance! it creates the tmp file when we call evaluate() on it
@@ -71,8 +65,6 @@ def launch_setup(context):
                 "parent": parent_link,
                 "xyz": xyz,
                 "rpy": rpy,
-                "lift_type": lift_type,
-                "ur_type": ur_type,
                 "sim_gazebo": sim_gazebo,
                 "use_fake_hardware": use_fake_hardware,
                 "simulation_controllers": str(controllers_file_path),
@@ -86,6 +78,19 @@ def launch_setup(context):
 
     sim_time_param = {"use_sim_time": LaunchConfiguration("sim_gazebo")}
 
+    # tf2_ros hardcodes an absolute "/tf"/"/tf_static" internally, which a
+    # Node's own `namespace=` does NOT touch (an already-absolute topic name
+    # is never re-namespaced) - this explicit remap to the relative "tf"/
+    # "tf_static" is what actually makes this robot's transforms land on its
+    # own /<namespace>/tf instead of the global /tf. Applied to every node
+    # here that publishes or looks up transforms (robot_state_publisher,
+    # move_group) - same strategy as agv_bringup/launch/bringup.launch.py in
+    # the sibling internal_delivery_system_ws workspace. controller_manager
+    # deliberately does NOT get this remap: it never publishes tf itself
+    # (joint_trajectory_controller doesn't broadcast odom tf the way
+    # diff_drive_controller does), so there is nothing to redirect.
+    tf_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
+
     moveit_config = (
         MoveItConfigsBuilder(namespace, package_name="group_a_moveit_config")
         .robot_description(
@@ -94,15 +99,13 @@ def launch_setup(context):
                 "parent": parent_link,
                 "xyz": xyz,
                 "rpy": rpy,
-                "lift_type": lift_type,
-                "ur_type": ur_type,
                 "sim_gazebo": sim_gazebo,
                 "use_fake_hardware": use_fake_hardware,
                 "simulation_controllers": str(controllers_file_path),
                 "namespace": namespace,
             },
         )
-        .robot_description_semantic(file_path=os.path.join(pkg_description, "config", "combined_system.srdf.xacro"), mappings={"namespace": namespace})
+        .robot_description_semantic(file_path=os.path.join(pkg_description, "config", "combined_system.srdf.xacro"))
         .robot_description_kinematics(os.path.join(pkg_moveit, "config", "kinematics.yaml"))
         .joint_limits(str(joint_limits_file_path))
         .trajectory_execution(str(controllers_file_path))
@@ -131,6 +134,7 @@ def launch_setup(context):
             robot_desc,
             sim_time_param,
         ],
+        remappings=tf_remappings,
     )
 
     # ── 2. Standalone Controller Manager (real hardware only) ─────────────────
@@ -159,8 +163,6 @@ def launch_setup(context):
             "robot_description",
             "-name",
             namespace,
-            "-J",
-            f"{namespace}/{tf_prefix}lift_lower_joint 0.001",
         ],
         condition=IfCondition(LaunchConfiguration("sim_gazebo")),
     )
@@ -226,24 +228,7 @@ def launch_setup(context):
         namespace=namespace,
         arguments=[
             "joint_state_broadcaster",
-            "all_joint_trajectory_controller",
-            "--controller-manager",
-            f"/{namespace}/controller_manager",
-            "--controller-manager-timeout",
-            "30",
-        ],
-        parameters=[sim_time_param],
-    )
-
-    motion_default_inactive_controllers_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        output="screen",
-        namespace=namespace,
-        arguments=[
-            "lift_joint_trajectory_controller",
-            "ur_joint_trajectory_controller",
-            "--inactive",
+            "gp70l_joint_trajectory_controller",
             "--controller-manager",
             f"/{namespace}/controller_manager",
             "--controller-manager-timeout",
@@ -284,6 +269,7 @@ def launch_setup(context):
         remappings=[
             ("/robot_description", f"{namespace}/robot_description"),
             ("/robot_description_semantic", f"{namespace}/robot_description_semantic"),
+            *tf_remappings,
         ],
     )
 
@@ -297,10 +283,6 @@ def launch_setup(context):
         TimerAction(
             period=4.0,
             actions=[motion_default_active_controllers_spawner],
-        ),
-        TimerAction(
-            period=4.0,
-            actions=[motion_default_inactive_controllers_spawner],
         ),
     ]
 

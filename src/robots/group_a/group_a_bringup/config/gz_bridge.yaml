@@ -33,10 +33,13 @@
   gz_type_name: "gz.msgs.Pose_V"
   direction: GZ_TO_ROS
 
-# ── TF (from PosePublisher plugin) ─────────────────────────────────────────────
-
-- ros_topic_name: "/tf"
-  gz_topic_name: "/$(var namespace)/tf"
-  ros_type_name: "tf2_msgs/msg/TFMessage"
-  gz_type_name: "gz.msgs.Pose_V"
-  direction: GZ_TO_ROS
+# PosePublisher's tf output is deliberately NOT bridged into ROS (it used to
+# be, straight onto the global "/tf" - removed). robot_state_publisher is
+# this robot's own tf source (base_link -> {gp_*, camera_*}), scoped to
+# /<namespace>/tf via bringup.launch.py's explicit remap; bridging
+# PosePublisher's ground-truth pose data onto that same topic (or worse, onto
+# the global /tf, as this used to) would be a second, conflicting source for
+# the same frames. The /pose bridge above is unaffected (independent gz
+# topic, ground-truth data still available for whoever wants it later) - same
+# reasoning as agv_bringup/config/gz_bridge.yaml in the sibling
+# internal_delivery_system_ws workspace.

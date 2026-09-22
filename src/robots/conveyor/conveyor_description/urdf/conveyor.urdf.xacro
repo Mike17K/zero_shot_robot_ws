@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<robot name="conveyor" xmlns:xacro="http://ros.org/xacro">
+
+  <!-- 1. Launch-injected arguments -->
+  <xacro:arg name="parent" default="world" />
+  <xacro:arg name="xyz" default="0 0 0" />
+  <xacro:arg name="rpy" default="0 0 0" />
+
+  <xacro:arg name="width" default="1.0" />
+  <xacro:arg name="length" default="2.0" />
+  <xacro:arg name="height" default="0.45" />
+  <xacro:arg name="roller_radius" default="0.05" />
+  <xacro:arg name="roller_gap" default="0.005" />
+  <xacro:arg name="side_rail_height" default="0.03" />
+
+  <xacro:arg name="sim_gazebo" default="false" />
+  <xacro:arg name="use_fake_hardware" default="true" />
+  <xacro:arg name="namespace" default="" />
+  <xacro:arg name="simulation_controllers"
+    default='$(find conveyor_bringup)/config/controllers.yaml' />
+
+  <!-- 2. Include the macro -->
+  <xacro:include filename="$(find conveyor_description)/urdf/conveyor_macro.xacro" />
+
+  <!-- 3. "world" root link, only when this instance's parent IS "world" (matches
+       group_a_description/urdf/group_a.urdf.xacro's pattern - a second conveyor
+       parented to an already-existing link, e.g. another prop, should not also
+       try to (re)declare "world"). -->
+  <xacro:if value="${'$(arg parent)' == 'world'}">
+    <link name="world" />
+  </xacro:if>
+
+  <!-- 4. Instantiate. Bare frame names (base_link, roller_1_link, ...) - multi-
+       instance disambiguation comes from ${namespace} scoping this conveyor's
+       nodes and topics (including /<namespace>/tf), not from prefixing frame
+       names - see conveyor_macro.xacro's namespace-strategy comment. -->
+  <xacro:conveyor_robot
+    parent="$(arg parent)"
+    namespace="$(arg namespace)"
+    width="$(arg width)"
+    length="$(arg length)"
+    height="$(arg height)"
+    roller_radius="$(arg roller_radius)"
+    roller_gap="$(arg roller_gap)"
+    side_rail_height="$(arg side_rail_height)"
+    sim_gazebo="$(arg sim_gazebo)"
+    use_fake_hardware="$(arg use_fake_hardware)"
+    simulation_controllers="$(arg simulation_controllers)"
+  >
+    <origin xyz="$(arg xyz)" rpy="$(arg rpy)" />
+  </xacro:conveyor_robot>
+
+</robot>

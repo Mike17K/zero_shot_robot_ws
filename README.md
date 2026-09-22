@@ -1,8 +1,8 @@
 <img src="docs/shared_nvblox.png">
 
-# Diffusion Robot Test Workspace
+# Zero-Shot Robot Workspace
 
-ROS 2 (Jazzy) workspace for multi-arm manipulation on lift-mounted UR arms ("group_a": Ewellix lift + UR arm + Orbbec camera), planned with [Isaac ROS cuMotion](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html) against a shared [nvblox](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/isaac_ros_nvblox/index.html) reconstruction, simulated in Gazebo. Longer-term goal is a diffusion-policy planner — see [docs/DIFFUSION_MODEL_IDEA.md](docs/DIFFUSION_MODEL_IDEA.md).
+ROS 2 (Jazzy) workspace for zero-shot manipulation on a floor-mounted Yaskawa GP70L arm ("group_a": GP70L arm + Orbbec camera, picking pallets/packages off a conveyor fleet), planned with [Isaac ROS cuMotion](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html) against a shared [nvblox](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/isaac_ros_nvblox/index.html) reconstruction, simulated in Gazebo. Longer-term goal is a diffusion-policy planner — see [docs/DIFFUSION_MODEL_IDEA.md](docs/DIFFUSION_MODEL_IDEA.md).
 
 All development happens inside a container built via the [Isaac ROS CLI](https://nvidia-isaac-ros.github.io/concepts/dev_env/index.html) — there is no host ROS install. Design rationale (why nvblox runs in static TSDF mode, why the workspace lives inside the container) is in [docs/STRUCTURAL_DESISIONS.md](docs/STRUCTURAL_DESISIONS.md).
 
@@ -10,9 +10,15 @@ All development happens inside a container built via the [Isaac ROS CLI](https:/
 
 ```bash
 git clone --recurse-submodules https://github.com/Mike17K/ros2_cuda_robotic_ws.git
+cd ros2_cuda_robotic_ws/src/robots/motoman_ros2_support_packages
+git sparse-checkout init --cone
+git sparse-checkout set motoman_gp70l_support motoman_resources
+cd ../../..
 bash scripts/setup_host.sh
 bash scripts/build_docker_image.sh
 ```
+
+`src/robots/motoman_ros2_support_packages` is Yaskawa's full multi-robot monorepo — the sparse-checkout above keeps only the GP70L description package and its shared materials, not the ~30 other robot packages it also contains. `--recurse-submodules` on its own checks out everything; the sparse-checkout step is what trims it back down.
 
 after the build that takes about 1.5h in my pc the layered docker image will be created, and already you should be in a shell inside the container with the name admin if not just run
 
@@ -40,7 +46,9 @@ this will open the terminator with the commands ready to run
 | Path                          | What                                                                                   |
 | ----------------------------- | -------------------------------------------------------------------------------------- |
 | `src/workcell`                | Gazebo world + shared workcell description                                             |
-| `src/robots/group_a`          | Robot description + MoveIt config for group_a                                          |
+| `src/robots/group_a`          | Robot description + MoveIt config for group_a (GP70L arm + Orbbec camera)              |
+| `src/robots/conveyor`         | Parametric, actuated conveyor belt description + bringup, spawned per-instance         |
+| `src/robots/motoman_ros2_support_packages` | Submodule (sparse), [Yaskawa-Global/motoman_ros2_support_packages](https://github.com/Yaskawa-Global/motoman_ros2_support_packages) — GP70L arm description |
 | `src/planning_bringup`        | cuMotion planning launch/config                                                        |
 | `src/vision`                  | nvblox launch/config                                                                   |
 | `src/isaac_ros_cumotion_fork` | Submodule, [Mike17K/isaac_ros_cumotion](https://github.com/Mike17K/isaac_ros_cumotion) |

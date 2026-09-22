@@ -1,0 +1,305 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- ── Namespace strategy: topic namespacing, NOT frame-name prefixing ────────
+         Same convention as group_a_description/urdf/group_a_macro.xacro and
+         agv_description/urdf/agv_macro.xacro (sibling internal_delivery_system_ws
+         workspace): link/joint names below are bare (base_link, roller_1_link, ...),
+         never built from ${namespace}. Multi-robot disambiguation comes entirely
+         from each conveyor's nodes (robot_state_publisher, gz_ros2_control) running
+         in their own ROS namespace and publishing to their own /<namespace>/tf.
+         ${namespace} is used only to scope gz_ros2_control's own nodes/topics -
+         never to build a frame or link name.
+    ──────────────────────────────────────────────────────────────────────────── -->
+
+    <!-- ── Belt-surface simplification ─────────────────────────────────────────
+         A real conveyor belt is a closed loop over two end drums - expensive/
+         fragile to simulate exactly in a rigid-body engine. This macro
+         approximates it with a row of independently-jointed rollers spanning
+         the full belt width, all driven to the same target velocity by one
+         ros2_control velocity controller (see conveyor_bringup). Items resting
+         on top get carried along +X (this belt's local travel direction) by
+         roller-surface friction, the same way a real roller conveyor works.
+
+         Roller COUNT is derived from `length`, `roller_radius` and
+         `roller_gap` (target clearance between adjacent roller SURFACES, not
+         centers - default 0.005m/0.5cm), computed identically here and in
+         conveyor_bringup/launch/bringup.launch.py (that Python copy has to
+         produce the exact same roller_1_joint..roller_N_joint names, since it
+         builds the controller's `joints` parameter list - see that file's own
+         comment on why this can't just come from a static YAML once N varies
+         per belt instance). If you change the formula, change it in both
+         places.
+
+         xacro has no native for-loop over XML content, so emitting N (a
+         runtime-computed value) links/joints uses a RECURSIVE macro
+         (conveyor_roller_chain below) instead of AGV's unrolled-by-hand style
+         (fine for AGV's always-exactly-2 wheels; not fine here since N
+         varies). Recursion depth = N, comfortably under Python's default
+         limit for any realistic belt length.
+    ──────────────────────────────────────────────────────────────────────────── -->
+    <!-- Top-level (not nested) macros: xacro registers macros globally by
+         name, so defining these INSIDE conveyor_robot's body would
+         re-declare them on every expansion (once per belt instance in the
+         workcell). -->
+    <xacro:macro name="conveyor_roller" params="idx x width roller_radius roller_z">
+        <link name="roller_${idx}_link">
+            <visual name="roller_${idx}_visual">
+                <geometry>
+                    <cylinder radius="${roller_radius}" length="${width}" />
+                </geometry>
+                <material name="roller_black">
+                    <color rgba="0.1 0.1 0.1 1.0" />
+                </material>
+            </visual>
+            <collision name="roller_${idx}_collision">
+                <geometry>
+                    <cylinder radius="${roller_radius}" length="${width}" />
+                </geometry>
+            </collision>
+            <inertial>
+                <!-- Solid-cylinder inertia, r=roller_radius, L=width, m=2kg. -->
+                <mass value="2.0" />
+                <inertia
+                    ixx="${2.0 * (3.0 * roller_radius * roller_radius + width * width) / 12.0}"
+                    ixy="0.0" ixz="0.0"
+                    iyy="${2.0 * (3.0 * roller_radius * roller_radius + width * width) / 12.0}"
+                    iyz="0.0"
+                    izz="${2.0 * 0.5 * roller_radius * roller_radius}" />
+            </inertial>
+        </link>
+
+        <!-- Cylinder axis (local Z by URDF convention) rotated 90° about X by
+             the joint origin, so it spins about world Y once mounted - same
+             pattern as agv_description's wheel joints. Every roller uses the
+             SAME axis sign ("0 0 1"), so they all spin the same way - no
+             differential-steering concern here, unlike a wheeled base. -->
+        <joint name="roller_${idx}_joint" type="continuous">
+            <origin xyz="${x} 0 ${roller_z}" rpy="1.5708 0 0" />
+            <parent link="base_link" />
+            <child link="roller_${idx}_link" />
+            <axis xyz="0 0 1" />
+            <limit effort="5.0" velocity="30.0" />
+        </joint>
+
+        <gazebo reference="roller_${idx}_link">
+            <!-- High friction: this is the belt's whole carrying surface, it
+                 needs to actually drag items along via friction. -->
+            <collision>
+                <surface>
+                    <friction>
+                        <ode>
+                            <mu>1.5</mu>
+                            <mu2>1.5</mu2>
+                        </ode>
+                    </friction>
+                </surface>
+            </collision>
+        </gazebo>
+    </xacro:macro>
+
+    <!-- Recursive: emits roller idx's link/joint/friction, then idx+1, ...,
+         up to and including `count`. -->
+    <xacro:macro name="conveyor_roller_chain" params="idx count x_start step width roller_radius roller_z">
+        <xacro:if value="${idx &lt;= count}">
+            <xacro:conveyor_roller idx="${idx}" x="${x_start + (idx - 1) * step}" width="${width}" roller_radius="${roller_radius}" roller_z="${roller_z}" />
+            <xacro:conveyor_roller_chain idx="${idx + 1}" count="${count}" x_start="${x_start}" step="${step}" width="${width}" roller_radius="${roller_radius}" roller_z="${roller_z}" />
+        </xacro:if>
+    </xacro:macro>
+
+    <!-- Recursive: emits the ros2_control <joint> declaration for roller
+         idx..count (mirrors conveyor_roller_chain, separate because it has
+         to land inside the single <ros2_control> element, not interleaved
+         with the link/joint/gazebo content above). -->
+    <xacro:macro name="conveyor_roller_control_joints" params="idx count">
+        <xacro:if value="${idx &lt;= count}">
+            <joint name="roller_${idx}_joint">
+                <command_interface name="velocity" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <xacro:conveyor_roller_control_joints idx="${idx + 1}" count="${count}" />
+        </xacro:if>
+    </xacro:macro>
+
+    <xacro:macro name="conveyor_robot"
+        params="
+        parent
+        namespace=''
+        width='1.0'
+        length='2.0'
+        height='0.45'
+        roller_radius='0.05'
+        roller_gap='0.005'
+        side_rail_height='0.03'
+        sim_gazebo='true'
+        use_fake_hardware='false'
+        simulation_controllers='$(find conveyor_bringup)/config/controllers.yaml'
+        *origin"
+    >
+
+        <xacro:property name="frame_height" value="${height - 2 * roller_radius}" />
+        <xacro:property name="roller_z" value="${frame_height + roller_radius}" />
+        <!-- End margin (outermost roller's clearance from the belt's own
+             ends) is a separate, fixed concern from roller_gap (clearance
+             BETWEEN rollers) - kept small and independent of roller_gap. -->
+        <xacro:property name="end_margin" value="${roller_radius + 0.02}" />
+        <!-- Center-to-center spacing that gives exactly roller_gap clearance
+             between adjacent roller SURFACES (two radii + the gap). -->
+        <xacro:property name="roller_pitch" value="${2 * roller_radius + roller_gap}" />
+        <xacro:property name="available_span" value="${length - 2 * end_margin}" />
+        <!-- floor(available_span / pitch) + 1 rollers fit with AT LEAST
+             roller_gap clearance (the actual spacing used below, roller_step,
+             is available_span/(num_rollers-1) >= roller_pitch, so real
+             clearance is >= the requested 0.5cm, never less). Clamped to a
+             minimum of 2 - a single roller can't hold up a belt. -->
+        <xacro:property name="num_rollers" value="${max(2, int(available_span / roller_pitch) + 1)}" />
+        <xacro:property name="roller_start_x" value="${-length / 2.0 + end_margin}" />
+        <xacro:property name="roller_end_x" value="${length / 2.0 - end_margin}" />
+        <xacro:property name="roller_step" value="${(roller_end_x - roller_start_x) / (num_rollers - 1)}" />
+        <xacro:property name="leg_thickness" value="0.2" />
+
+        <!-- Side guide rails: one beam along each side of the roller row,
+             touching the rollers' own end-faces (y=+-width/2), running the
+             full row from the first to the last roller. Bottom is grounded
+             at frame_height (same start as the legs, for a continuous look);
+             top is height + side_rail_height - i.e. side_rail_height is the
+             rail's height ABOVE the belt's own conveying surface, which is
+             the actually-meaningful parametric quantity: low for a pallet
+             belt (a guide that doesn't block the robot lifting a pallet off
+             from above), tall for a raised infeed belt carrying loose items
+             (a wall that keeps them from falling off the sides) - see
+             workcell_bringup/launch/workcell.launch.py's per-instance
+             side_rail_height values. -->
+        <xacro:property name="rail_thickness" value="0.02" />
+        <xacro:property name="rail_length" value="${roller_end_x - roller_start_x}" />
+        <xacro:property name="rail_z_top" value="${height + side_rail_height}" />
+        <xacro:property name="rail_height" value="${rail_z_top - frame_height}" />
+        <xacro:property name="rail_z_center" value="${(frame_height + rail_z_top) / 2.0}" />
+        <xacro:property name="rail_y" value="${width / 2.0 + rail_thickness / 2.0}" />
+
+        <!-- === Mount ────────────────────────────────────────────────────────── -->
+        <joint name="mount_joint" type="fixed">
+            <parent link="${parent}" />
+            <child link="base_link" />
+            <xacro:insert_block name="origin" />
+        </joint>
+
+        <!-- === Frame/stand ──────────────────────────────────────────────────────
+             Local origin convention: center of footprint, at floor level. Spans
+             x:[-length/2,length/2], y:[-width/2,width/2], z:[0,frame_height].
+             The roller tops (z = frame_height + 2*roller_radius = height) are
+             the belt's conveying surface / "height" param.
+
+             Two end legs (under the first/last roller), not one solid wall the
+             full length: leaves the middle of the belt open underneath, so
+             another (elevated) conveyor can cross above this one without its
+             own supports interpenetrating this belt's rollers - see
+             workcell_bringup/launch/workcell.launch.py's conveyor_package_infeed,
+             which crosses conveyor_pallet_mid this way.
+        ──────────────────────────────────────────────────────────────────────── -->
+        <link name="base_link">
+            <visual name="leg_near_visual">
+                <origin xyz="${roller_start_x} 0 ${frame_height / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${leg_thickness} ${width} ${frame_height}" />
+                </geometry>
+                <material name="frame_orange">
+                    <color rgba="0.85 0.45 0.1 1.0" />
+                </material>
+            </visual>
+            <collision name="leg_near_collision">
+                <origin xyz="${roller_start_x} 0 ${frame_height / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${leg_thickness} ${width} ${frame_height}" />
+                </geometry>
+            </collision>
+            <visual name="leg_far_visual">
+                <origin xyz="${roller_end_x} 0 ${frame_height / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${leg_thickness} ${width} ${frame_height}" />
+                </geometry>
+                <material name="frame_orange">
+                    <color rgba="0.85 0.45 0.1 1.0" />
+                </material>
+            </visual>
+            <collision name="leg_far_collision">
+                <origin xyz="${roller_end_x} 0 ${frame_height / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${leg_thickness} ${width} ${frame_height}" />
+                </geometry>
+            </collision>
+            <visual name="side_rail_pos_visual">
+                <origin xyz="0 ${rail_y} ${rail_z_center}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${rail_length} ${rail_thickness} ${rail_height}" />
+                </geometry>
+                <material name="frame_orange">
+                    <color rgba="0.85 0.45 0.1 1.0" />
+                </material>
+            </visual>
+            <collision name="side_rail_pos_collision">
+                <origin xyz="0 ${rail_y} ${rail_z_center}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${rail_length} ${rail_thickness} ${rail_height}" />
+                </geometry>
+            </collision>
+            <visual name="side_rail_neg_visual">
+                <origin xyz="0 ${-rail_y} ${rail_z_center}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${rail_length} ${rail_thickness} ${rail_height}" />
+                </geometry>
+                <material name="frame_orange">
+                    <color rgba="0.85 0.45 0.1 1.0" />
+                </material>
+            </visual>
+            <collision name="side_rail_neg_collision">
+                <origin xyz="0 ${-rail_y} ${rail_z_center}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${rail_length} ${rail_thickness} ${rail_height}" />
+                </geometry>
+            </collision>
+            <inertial>
+                <!-- Static-ish frame - fixed to parent via mount_joint, mass is
+                     dynamically irrelevant, kept non-zero/non-singular. -->
+                <mass value="20.0" />
+                <origin xyz="0 0 ${frame_height / 2.0}" rpy="0 0 0" />
+                <inertia ixx="1.0" ixy="0.0" ixz="0.0" iyy="1.0" iyz="0.0" izz="1.0" />
+            </inertial>
+        </link>
+
+        <!-- === Rollers ────────────────────────────────────────────────────────── -->
+        <xacro:conveyor_roller_chain idx="1" count="${num_rollers}" x_start="${roller_start_x}" step="${roller_step}" width="${width}" roller_radius="${roller_radius}" roller_z="${roller_z}" />
+
+        <!-- === ROS 2 Control ────────────────────────────────────────────────── -->
+        <ros2_control name="conveyor_hardware" type="system">
+            <hardware>
+                <xacro:if value="${sim_gazebo}">
+                    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+                </xacro:if>
+                <xacro:if value="${use_fake_hardware}">
+                    <plugin>mock_components/GenericSystem</plugin>
+                    <param name="state_following_offset">0.0</param>
+                </xacro:if>
+                <xacro:unless value="${use_fake_hardware or sim_gazebo}">
+                    <plugin>mock_components/GenericSystem</plugin>
+                </xacro:unless>
+            </hardware>
+            <xacro:conveyor_roller_control_joints idx="1" count="${num_rollers}" />
+        </ros2_control>
+
+        <!-- === Gazebo-only blocks ──────────────────────────────────────────── -->
+        <xacro:if value="${sim_gazebo}">
+            <gazebo>
+                <plugin filename="gz_ros2_control-system"
+                    name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+                    <ros>
+                        <namespace>${namespace}</namespace>
+                    </ros>
+                    <parameters>${simulation_controllers}</parameters>
+                </plugin>
+            </gazebo>
+        </xacro:if>
+
+    </xacro:macro>
+</robot>

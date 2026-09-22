@@ -8,77 +8,64 @@ default_acceleration_scaling_factor: 1.0
 
 # Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
 # Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
+#
+# Position/velocity below mirror motoman_gp70l_support/urdf/gp70l_macro.xacro's
+# own <limit> values (MOTOMAN-GP70L INSTRUCTIONS HW2480667 rev 1), converted to
+# radians. Acceleration has no URDF equivalent - these are an approximate
+# max_velocity*1.5 (full speed in ~0.67s) default, not a vendor-specified
+# number; tune down if motion looks unrealistically snappy in sim.
 joint_limits:
-  # --- Ewelix TLT600 Lift Joints ---
-  $(var namespace)/$(var tf_prefix)lift_lower_joint:
+  # --- Yaskawa Motoman GP70L Joints (Converted to Radians) ---
+  gp_joint_1:
     has_position_limits: true
-    min_position: -0.001 # Προσθήκη ανοχής για αποφυγή του CheckStartStateBounds error
-    max_position: 0.40 # Από τα specs της Ewelix (lower.joint.limit.upper)
+    min_position: -3.141593 # -180 deg
+    max_position: 3.141593 # 180 deg
     has_velocity_limits: true
-    max_velocity: 0.088 # Από τα specs της Ewelix (lower.joint.limit.velocity)
+    max_velocity: 3.141593 # 180 deg/s
     has_acceleration_limits: true
-    max_acceleration: 0.2
+    max_acceleration: 4.7124
 
-  $(var namespace)/$(var tf_prefix)lift_upper_joint:
+  gp_joint_2:
     has_position_limits: true
-    min_position: -0.001 # Προσθήκη ανοχής για αποφυγή του CheckStartStateBounds error
-    max_position: 0.40 # Από τα specs της Ewelix (upper.joint.limit.upper)
+    min_position: -1.570796 # -90 deg
+    max_position: 2.705260 # 155 deg
     has_velocity_limits: true
-    max_velocity: 0.088 # Από τα specs της Ewelix (upper.joint.limit.velocity)
+    max_velocity: 2.146755 # 123 deg/s
     has_acceleration_limits: true
-    max_acceleration: 0.2
+    max_acceleration: 3.2201
 
-  # --- Universal Robots UR10 CB3 Joints (Converted to Radians) ---
-  $(var namespace)/$(var tf_prefix)ur_shoulder_pan_joint:
+  gp_joint_3:
     has_position_limits: true
-    min_position: -6.283185307179586 # -360 μοίρες σε ακτίνια
-    max_position: 6.283185307179586 # 360 μοίρες σε ακτίνια
+    min_position: -1.396263 # -80 deg
+    max_position: 1.570796 # 90 deg
     has_velocity_limits: true
-    max_velocity: 2.0943951023931953 # 120 μοίρες/sec σε ακτίνια
+    max_velocity: 2.792527 # 160 deg/s
     has_acceleration_limits: true
-    max_acceleration: 5.0
+    max_acceleration: 4.1888
 
-  $(var namespace)/$(var tf_prefix)ur_shoulder_lift_joint:
+  gp_joint_4:
     has_position_limits: true
-    min_position: -6.283185307179586 # -360 μοίρες σε ακτίνια
-    max_position: 6.283185307179586 # 360 μοίρες σε ακτίνια
+    min_position: -6.283185 # -360 deg
+    max_position: 6.283185 # 360 deg
     has_velocity_limits: true
-    max_velocity: 2.0943951023931953 # 120 μοίρες/sec σε ακτίνια
+    max_velocity: 4.014257 # 230 deg/s
     has_acceleration_limits: true
-    max_acceleration: 5.0
+    max_acceleration: 6.0214
 
-  $(var namespace)/$(var tf_prefix)ur_elbow_joint:
+  gp_joint_5:
     has_position_limits: true
-    min_position: -3.141592653589793 # -180 μοίρες σε ακτίνια (τεχνητός περιορισμός λόγω MoveIt)
-    max_position: 3.141592653589793 # 180 μοίρες σε ακτίνια (τεχνητός περιορισμός λόγω MoveIt)
+    min_position: -2.181662 # -125 deg
+    max_position: 2.181662 # 125 deg
     has_velocity_limits: true
-    max_velocity: 3.141592653589793 # 180 μοίρες/sec σε ακτίνια
+    max_velocity: 4.014257 # 230 deg/s
     has_acceleration_limits: true
-    max_acceleration: 5.0
+    max_acceleration: 6.0214
 
-  $(var namespace)/$(var tf_prefix)ur_wrist_1_joint:
+  gp_joint_6:
     has_position_limits: true
-    min_position: -6.283185307179586 # -360 μοίρες σε ακτίνια
-    max_position: 6.283185307179586 # 360 μοίρες σε ακτίνια
+    min_position: -6.283185 # -360 deg
+    max_position: 6.283185 # 360 deg
     has_velocity_limits: true
-    max_velocity: 3.141592653589793 # 180 μοίρες/sec σε ακτίνια
+    max_velocity: 6.108652 # 350 deg/s
     has_acceleration_limits: true
-    max_acceleration: 5.0
-
-  $(var namespace)/$(var tf_prefix)ur_wrist_2_joint:
-    has_position_limits: true
-    min_position: -6.283185307179586 # -360 μοίρες σε ακτίνια
-    max_position: 6.283185307179586 # 360 μοίρες σε ακτίνια
-    has_velocity_limits: true
-    max_velocity: 3.141592653589793 # 180 μοίρες/sec σε ακτίνια
-    has_acceleration_limits: true
-    max_acceleration: 5.0
-
-  $(var namespace)/$(var tf_prefix)ur_wrist_3_joint:
-    has_position_limits: true
-    min_position: -6.283185307179586 # -360 μοίρες σε ακτίνια
-    max_position: 6.283185307179586 # 360 μοίρες σε ακτίνια
-    has_velocity_limits: true
-    max_velocity: 3.141592653589793 # 180 μοίρες/sec σε ακτίνια
-    has_acceleration_limits: true
-    max_acceleration: 5.0
+    max_acceleration: 9.163

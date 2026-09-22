@@ -4,111 +4,74 @@
     <xacro:macro name="group_a_robot"
         params="
         parent
-        tf_prefix=''
         namespace=''
-        lift_type='ur_620'
-        ur_type='ur10'
         sim_gazebo='true'
         use_fake_hardware='false'
         simulation_controllers='$(find group_a_bringup)/config/controllers.yaml'
         *origin"
     >
 
-        <!-- ── Derived prefixes from namespace ──────────────────────────────────
-             All links/joints in the kinematic chain get the namespace prefix.
-             This ensures each robot has a unique TF tree rooted at world.
-             lift_prefix : e.g. "robot_1/lift_"
-             ur_prefix   : e.g. "robot_1/ur_"
-
+        <!-- ── Namespace strategy: topic namespacing, NOT frame-name prefixing ────
+             Link/joint names below are bare (gp_base_link, camera_link, ...) -
+             they are NOT built from ${namespace}. Multi-robot disambiguation
+             comes entirely from each robot's nodes (robot_state_publisher,
+             gz_ros2_control, move_group, the gz bridge) running within their
+             own ROS namespace and publishing to their own /<namespace>/tf
+             topic - the same strategy used by agv_description/agv_macro.xacro
+             in the sibling internal_delivery_system_ws workspace.
+             ${namespace} is still used below, but only for the things it's
+             actually for: scoping gz_ros2_control's own nodes/topics and the
+             camera sensor topics to this robot's ROS namespace - never to
+             build a frame or link name.
+             "gp_" / "camera_" below are permanent, literal name prefixes
+             (organizational, distinguishing the arm's links from the camera's)
+             - not per-instance template variables, same as AGV's own literal
+             "wheel_left_"/"caster_front_"/"lidar_" link names.
         ──────────────────────────────────────────────────────────────────────── -->
-        <xacro:property name="prefix" value="${namespace}/${tf_prefix}" />
-        <xacro:property name="lift_prefix" value="${prefix}lift_" />
-        <xacro:property name="ur_prefix" value="${prefix}ur_" />
 
-        <!-- === Includes === -->
-        <xacro:include filename="$(find ewellix_description)/urdf/ewellix_macro.xacro" />
-        <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro" />
-        <xacro:include filename="$(find ur_description)/urdf/inc/ur_joint_control.xacro" />
-
-        <!-- === Ewellix Lift ────────────────────────────────────────────────────
-             prefix="${lift_prefix}" → all lift links become robot_1/lift_*
-             parent stays "world" (unprefixed global anchor)
+        <!-- === Includes ───────────────────────────────────────────────────────
+             motoman_gp70l_support/motoman_resources are a sparse-checked-out
+             submodule - see src/robots/motoman_ros2_support_packages and the
+             README's Quickstart. Unlike ur_description's ur_macro.xacro, this
+             vendor macro:
+               - takes only `prefix` - no `parent`/`*origin` handling, so the
+                 mount_joint below is ours to add (same as
+                 conveyor_description's own mount_joint).
+               - ships no <ros2_control> block at all, so that's ours to write
+                 too (below), unlike UR's bundled ur_joint_control_description.
+               - ships NO <inertial> on any link (visual/collision only) -
+                 fine for MoveIt/visualization, fatal for Gazebo: sdformat's
+                 urdf2sdf drops any link missing mass (and everything
+                 downstream of it), so the arm never actually spawned as a
+                 physical model. Using our own local
+                 gp70l_macro_with_inertials.xacro instead of the submodule's
+                 file - same macro/link/joint names, with placeholder
+                 mass/inertia added. See that file's own header comment for
+                 why this is a local fork rather than an edit to the
+                 submodule.
+             (common_materials.xacro, for the arm's visual color, is pulled in
+             by that file itself - no separate include needed here.)
         ──────────────────────────────────────────────────────────────────────── -->
-        <xacro:ewellix_lift
-            parent="${parent}"
-            tf_prefix="${lift_prefix}"
-            add_plate="true"
-            add_mount="true"
-            parameters_file="$(find ewellix_description)/config/${lift_type}.yaml"
-            generate_ros2_control_tag="false"
-            use_fake_hardware="${use_fake_hardware}"
-            sim_gazebo="${sim_gazebo}"
-        >
+        <xacro:include filename="$(find group_a_description)/urdf/gp70l_macro_with_inertials.xacro" />
+
+        <!-- === GP70L Arm ──────────────────────────────────────────────────────── -->
+        <xacro:motoman_gp70l prefix="gp_" />
+
+        <joint name="mount_joint" type="fixed">
+            <parent link="${parent}" />
+            <child link="gp_base_link" />
             <xacro:insert_block name="origin" />
-        </xacro:ewellix_lift>
+        </joint>
 
-        <xacro:property name="parameters_file"
-            value="$(find ewellix_description)/config/${lift_type}.yaml" />
-        <xacro:property name="parameters"
-            value="${xacro.load_yaml(parameters_file)}" />
-        <!-- ROS 2 Controls -->
-        <ros2_control name="${tf_prefix}hardware" type="system">
-            <hardware>
-                <xacro:if value="${sim_gazebo}">
-                    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
-                </xacro:if>
-                <xacro:if value="${use_fake_hardware}">
-                    <plugin>mock_components/GenericSystem</plugin>
-                    <param name="state_following_offset">0.0</param>
-                    <param name="calculate_dynamics">true</param>
-                </xacro:if>
-                <xacro:unless value="${use_fake_hardware or sim_gazebo}">
-                    <plugin>ewellix_driver/EwellixHardwareInterface</plugin>
-                    <param name="port">${port}</param>
-                    <param name="baud">${baud}</param>
-                    <param name="timeout">${timeout}</param>
-                    <param name="conversion">${conversion}</param>
-                    <param name="rated_effort">${rated_effort}</param>
-                    <param name="tolerance">${tolerance}</param>
-                    <param name="encoder_limits_lower">${parameters.encoder_limits.lower}</param>
-                    <param name="encoder_limits_upper">${parameters.encoder_limits.upper}</param>
-                </xacro:unless>
-            </hardware>
-            <joint name="${lift_prefix}lower_joint">
-                <command_interface name="position" />
-                <state_interface name="position">
-                    <param name="initial_value">${parameters.lower.joint.limit.lower + 0.001}</param>
-                </state_interface>
-                <state_interface name="velocity" />
-                <state_interface name="effort" />
-            </joint>
-            <xacro:if value="${sim_gazebo or use_fake_hardware}">
-                <joint name="${lift_prefix}upper_joint">
-                    <param name="mimic">${lift_prefix}lower_joint</param>
-                    <param name="multiplier">1</param>
-                </joint>
-            </xacro:if>
-        </ros2_control>
-
-
-        <!-- === UR Arm ──────────────────────────────────────────────────────────
-             prefix="${ur_prefix}"       → all UR links become robot_1/ur_*
-             parent="${lift_prefix}mount"   → robot_1/lift_mount
+        <!-- === ros2_control block ──────────────────────────────────────────────
+             Position-controlled, like group_a's previous UR arm (matches a
+             joint_trajectory_controller downstream) - GP70L's own joint
+             limits (position/effort/velocity) already live on the <joint>
+             elements gp70l_macro.xacro emitted above; MoveIt's own
+             acceleration limits are supplied separately, in
+             group_a_moveit_config/config/joint_limits.yaml.
         ──────────────────────────────────────────────────────────────────────── -->
-        <xacro:ur_robot
-            name="${ur_type}"
-            tf_prefix="${ur_prefix}"
-            parent="${lift_prefix}mount"
-            joint_limits_parameters_file="$(find ur_description)/config/${ur_type}/joint_limits.yaml"
-            kinematics_parameters_file="$(find ur_description)/config/${ur_type}/default_kinematics.yaml"
-            physical_parameters_file="$(find ur_description)/config/${ur_type}/physical_parameters.yaml"
-            visual_parameters_file="$(find ur_description)/config/${ur_type}/visual_parameters.yaml"
-        >
-            <origin xyz="0 0 0" rpy="0 0 0" />
-        </xacro:ur_robot>
-
-        <!-- === UR ros2_control block ─────────────────────────────────────────── -->
-        <ros2_control name="${prefix}${ur_type}_hardware" type="system">
+        <ros2_control name="gp70l_hardware" type="system">
             <hardware>
                 <xacro:if value="${sim_gazebo}">
                     <plugin>gz_ros2_control/GazeboSimSystem</plugin>
@@ -117,14 +80,45 @@
                     <plugin>mock_components/GenericSystem</plugin>
                 </xacro:unless>
             </hardware>
-            <xacro:ur_joint_control_description tf_prefix="${ur_prefix}" />
+            <joint name="gp_joint_1">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <joint name="gp_joint_2">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <joint name="gp_joint_3">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <joint name="gp_joint_4">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <joint name="gp_joint_5">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
+            <joint name="gp_joint_6">
+                <command_interface name="position" />
+                <state_interface name="position" />
+                <state_interface name="velocity" />
+            </joint>
         </ros2_control>
 
-        <!-- === Camera at UR end-effector ──────────────────────────────────────
-             Link names: ${prefix}camera_link  →  e.g. robot_1/camera_link
-             Parent:     ${ur_prefix}tool0         →  e.g. robot_1/ur_tool0
+        <!-- === Camera at GP70L end-effector ─────────────────────────────────────
+             Link names: camera_link   (bare, literal)
+             Parent:     gp_tool0      (bare, literal - GP70L's own
+                          ROS-Industrial "all-zeros tool frame", same role
+                          ur_tool0 played before)
         ──────────────────────────────────────────────────────────────────────── -->
-        <link name="${prefix}camera_link">
+        <link name="camera_link">
             <visual>
                 <geometry>
                     <box size="0.040 0.095 0.030" />
@@ -145,17 +139,17 @@
             </inertial>
         </link>
 
-        <joint name="${prefix}camera_joint" type="fixed">
-            <parent link="${ur_prefix}tool0" />          <!-- robot_1/ur_tool0 -->
-            <child link="${prefix}camera_link" />   <!-- robot_1/camera_link -->
+        <joint name="camera_joint" type="fixed">
+            <parent link="gp_tool0" />
+            <child link="camera_link" />
             <origin xyz="0 0 0.020" rpy="0 0 0" />
         </joint>
 
         <!-- Optical frame -->
-        <link name="${prefix}camera_optical_frame" />
-        <joint name="${prefix}camera_optical_joint" type="fixed">
-            <parent link="${prefix}camera_link" />
-            <child link="${prefix}camera_optical_frame" />
+        <link name="camera_optical_frame" />
+        <joint name="camera_optical_joint" type="fixed">
+            <parent link="camera_link" />
+            <child link="camera_optical_frame" />
             <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}" />
         </joint>
 
@@ -180,10 +174,10 @@
                     <update_frequency>50</update_frequency>
                 </plugin>
             </gazebo>
-            
+
             <!-- Replace the single rgbd_camera sensor with two sensors: depth + rgb -->
-            <gazebo reference="${prefix}camera_link">
-                <sensor name="${prefix}depth_camera" type="depth_camera">
+            <gazebo reference="camera_link">
+                <sensor name="depth_camera" type="depth_camera">
                     <camera>
                         <horizontal_fov>1.2120256</horizontal_fov>
                         <image>
@@ -195,7 +189,7 @@
                             <near>0.10</near>
                             <far>3.0</far>
                         </clip>
-                        <optical_frame_id>${prefix}camera_optical_frame</optical_frame_id>
+                        <optical_frame_id>camera_optical_frame</optical_frame_id>
                     </camera>
                     <always_on>1</always_on>
                     <update_rate>10</update_rate>
@@ -203,7 +197,7 @@
                     <topic>${namespace}/camera/depth</topic>
                 </sensor>
 
-                <sensor name="${prefix}rgb_camera" type="camera">
+                <sensor name="rgb_camera" type="camera">
                     <camera>
                         <horizontal_fov>1.2120256</horizontal_fov>
                         <image>
@@ -220,7 +214,7 @@
                             <mean>0.0</mean>
                             <stddev>0.007</stddev>
                         </noise>
-                        <optical_frame_id>${prefix}camera_optical_frame</optical_frame_id>
+                        <optical_frame_id>camera_optical_frame</optical_frame_id>
                     </camera>
                     <always_on>1</always_on>
                     <update_rate>10</update_rate>

@@ -6,11 +6,8 @@
   <xacro:arg name="xyz" default="0 0 0" />
   <xacro:arg name="rpy" default="0 0 0" />
 
-  <xacro:arg name="lift_type" default="ur_620" />
-  <xacro:arg name="ur_type" default="ur10" />
   <xacro:arg name="sim_gazebo" default="false" />
   <xacro:arg name="use_fake_hardware" default="true" />
-  <xacro:arg name="tf_prefix" default="" />
   <xacro:arg name="namespace" default="" />
   <xacro:arg name="simulation_controllers"
     default='$(find group_a_bringup)/config/controllers.yaml' />
@@ -26,11 +23,8 @@
   <!-- 4. Δυναμική κλήση του Macro (Επίσης διορθωμένα τα properties) -->
   <xacro:group_a_robot
     parent="$(arg parent)"
-    lift_type="$(arg lift_type)"
-    ur_type="$(arg ur_type)"
     sim_gazebo="$(arg sim_gazebo)"
     use_fake_hardware="$(arg use_fake_hardware)"
-    tf_prefix="$(arg tf_prefix)"
     namespace="$(arg namespace)"
     simulation_controllers="$(arg simulation_controllers)"
   >

@@ -6,33 +6,15 @@
 
     moveit_simple_controller_manager:
       controller_names:
-        - all_joint_trajectory_controller
-        - lift_joint_trajectory_controller
-        - ur_joint_trajectory_controller
+        - gp70l_joint_trajectory_controller
 
-      all_joint_trajectory_controller:
+      gp70l_joint_trajectory_controller:
         action_ns: follow_joint_trajectory
         type: FollowJointTrajectory
         joints:
-          - $(var namespace)/$(var tf_prefix)lift_lower_joint
-          - $(var namespace)/$(var tf_prefix)ur_shoulder_pan_joint
-          - $(var namespace)/$(var tf_prefix)ur_shoulder_lift_joint
-          - $(var namespace)/$(var tf_prefix)ur_elbow_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_1_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_2_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_3_joint
-      lift_joint_trajectory_controller:
-        action_ns: follow_joint_trajectory
-        type: FollowJointTrajectory
-        joints:
-          - $(var namespace)/$(var tf_prefix)lift_lower_joint
-      ur_joint_trajectory_controller:
-        action_ns: follow_joint_trajectory
-        type: FollowJointTrajectory
-        joints:
-          - $(var namespace)/$(var tf_prefix)ur_shoulder_pan_joint
-          - $(var namespace)/$(var tf_prefix)ur_shoulder_lift_joint
-          - $(var namespace)/$(var tf_prefix)ur_elbow_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_1_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_2_joint
-          - $(var namespace)/$(var tf_prefix)ur_wrist_3_joint
+          - gp_joint_1
+          - gp_joint_2
+          - gp_joint_3
+          - gp_joint_4
+          - gp_joint_5
+          - gp_joint_6

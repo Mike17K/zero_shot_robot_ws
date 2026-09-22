@@ -75,6 +75,16 @@
       <pose>0 0 0 0 0 0</pose>
       <self_collide>false</self_collide>
     </model>
+    <!-- Static pedestal the zero-shot pick/place arm (group_a, robot_1) mounts
+         on top of - see workcell_description/models/robot_pedestal. Resolved
+         via GZ_SIM_RESOURCE_PATH, appended in workcell_bringup/launch/
+         workcell.launch.py to include this package's models/ directory. -->
+    <include>
+      <uri>model://robot_pedestal</uri>
+      <name>robot_pedestal</name>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+
     <light name='directionallight' type='directional'>
       <pose>3.0200743590028551 2.9018960248054797 2 0 0 0</pose>
       <cast_shadows>true</cast_shadows>

@@ -15,19 +15,7 @@ planner_configs:
   PRMkConfigDefault:
     type: geometric::PRM
 
-all:
-  default_planner_config: RRTConnectkConfigDefault
-  planner_configs:
-    - RRTConnectkConfigDefault
-    - PRMkConfigDefault
-
-lift:
-  default_planner_config: RRTConnectkConfigDefault
-  planner_configs:
-    - RRTConnectkConfigDefault
-    - PRMkConfigDefault
-
-ur:
+manipulator:
   default_planner_config: RRTConnectkConfigDefault
   planner_configs:
     - RRTConnectkConfigDefault
