@@ -1,12 +1,9 @@
-all:
+manipulator:
   kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
   kinematics_solver_search_resolution: 0.0050000000000000001
   kinematics_solver_timeout: 0.0050000000000000001
-lift:
-  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
-  kinematics_solver_search_resolution: 0.0050000000000000001
-  kinematics_solver_timeout: 0.0050000000000000001
-ur:
-  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
-  kinematics_solver_search_resolution: 0.0050000000000000001
-  kinematics_solver_timeout: 0.0050000000000000001
+  # GP70L ships an analytical OPW solver parameter file
+  # (motoman_gp70l_support/config/opw_parameters_gp70l.yaml) for use with
+  # moveit_opw_kinematics_plugin, which would be faster/more robust than KDL
+  # for this 6-DOF industrial arm - not switched to here since that plugin
+  # isn't a dependency of this workspace yet. Worth adding later.

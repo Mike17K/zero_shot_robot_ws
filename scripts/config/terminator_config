@@ -43,9 +43,18 @@
       parent = split_vert_right
       order = 0
       title = Depth Logic
-    [[[terminal3]]]
-      type = Terminal
+    [[[split_vert_right_bottom]]]
+      type = VPaned
       parent = split_vert_right
       order = 1
+    [[[terminal3]]]
+      type = Terminal
+      parent = split_vert_right_bottom
+      order = 0
       title = System Logs
+    [[[terminal4]]]
+      type = Terminal
+      parent = split_vert_right_bottom
+      order = 1
+      title = Teleop UI
 [plugins]

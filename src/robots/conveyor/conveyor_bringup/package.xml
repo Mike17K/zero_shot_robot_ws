@@ -1,18 +1,21 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>group_a_description</name>
+  <name>conveyor_bringup</name>
   <version>0.0.1</version>
-  <description>URDF/Xacro description for Group A: Yaskawa GP70L arm + Orbbec camera</description>
+  <description>Bringup launch files for a single actuated conveyor belt instance</description>
   <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>motoman_gp70l_support</depend>
-  <depend>motoman_resources</depend>
-  <depend>xacro</depend>
+  <depend>conveyor_description</depend>
   <depend>robot_state_publisher</depend>
+  <depend>controller_manager</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>xacro</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

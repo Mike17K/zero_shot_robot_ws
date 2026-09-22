@@ -1,0 +1,45 @@
+# Static fallback ONLY - the actual controllers.yaml used at launch is
+# generated dynamically by conveyor_bringup/launch/bringup.launch.py
+# (_controllers_yaml()), because the roller count (and therefore this
+# `joints` list) depends on each belt instance's own width/length/height/
+# roller_radius/roller_gap - a single static file can't be correct for every
+# instance once that count varies. This file is only what
+# conveyor_description/urdf/conveyor.urdf.xacro's `simulation_controllers`
+# arg falls back to if the URDF is processed directly, outside
+# bringup.launch.py (e.g. manual xacro/RViz preview) - the 18 joints below
+# match conveyor_macro.xacro's own defaults (length=2.0, roller_radius=0.05,
+# roller_gap=0.005). Keep in sync with those defaults, or just don't rely on
+# this file for anything that actually spins.
+/$(var namespace):
+  controller_manager:
+    ros__parameters:
+      update_rate: 100
+
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      belt_velocity_controller:
+        type: forward_command_controller/ForwardCommandController
+
+  belt_velocity_controller:
+    ros__parameters:
+      joints:
+        - roller_1_joint
+        - roller_2_joint
+        - roller_3_joint
+        - roller_4_joint
+        - roller_5_joint
+        - roller_6_joint
+        - roller_7_joint
+        - roller_8_joint
+        - roller_9_joint
+        - roller_10_joint
+        - roller_11_joint
+        - roller_12_joint
+        - roller_13_joint
+        - roller_14_joint
+        - roller_15_joint
+        - roller_16_joint
+        - roller_17_joint
+        - roller_18_joint
+      interface_name: velocity

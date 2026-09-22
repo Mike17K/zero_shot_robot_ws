@@ -99,14 +99,14 @@
         # ── View calculator ─────────────────────────────────────────────────────
         raycast_subsampling_factor: 4
         # Bound the workspace to the arm's reachable volume
-        # Adjust these to match your UR10 + Ewellix reach envelope
+        # Adjust these to match your UR10 reach envelope
         workspace_bounds_type: "height_bounds"
         workspace_bounds_min_corner_x_m: 0.0 # unused in height_bounds mode
         workspace_bounds_min_corner_y_m: 0.0
         workspace_bounds_min_height_m: -0.1 # just below floor mount
         workspace_bounds_max_corner_x_m: 0.0
         workspace_bounds_max_corner_y_m: 0.0
-        workspace_bounds_max_height_m: 2.5 # ewellix max height + ur reach
+        workspace_bounds_max_height_m: 1.5 # ur10 max reach from floor mount
 
         # ── ESDF integrator ─────────────────────────────────────────────────────
         esdf_integrator_min_weight: 0.1

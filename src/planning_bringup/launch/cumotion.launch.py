@@ -52,13 +52,10 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args = []
     args.append(DeclareLaunchArgument("use_fake_hardware", default_value="true"))
     args.append(DeclareLaunchArgument("sim_gazebo", default_value="false"))
-    args.append(DeclareLaunchArgument("lift_type", default_value="ur_620"))
-    args.append(DeclareLaunchArgument("ur_type", default_value="ur10"))
     args.append(DeclareLaunchArgument("parent_link", default_value="world"))
     args.append(DeclareLaunchArgument("xyz", default_value="0.0 0.0 0.0"))
     args.append(DeclareLaunchArgument("rpy", default_value="0.0 0.0 0.0"))
     args.append(DeclareLaunchArgument("namespace", default_value="robot_1"))
-    args.append(DeclareLaunchArgument("tf_prefix", default_value=""))
     return args
 
 
@@ -67,13 +64,10 @@ def launch_setup(context, launch_configs):
 
     use_fake_hardware = LaunchConfiguration("use_fake_hardware").perform(context)
     sim_gazebo = LaunchConfiguration("sim_gazebo").perform(context)
-    lift_type = LaunchConfiguration("lift_type").perform(context)
-    ur_type = LaunchConfiguration("ur_type").perform(context)
     parent_link = LaunchConfiguration("parent_link").perform(context)
     xyz = LaunchConfiguration("xyz").perform(context)
     rpy = LaunchConfiguration("rpy").perform(context)
     namespace = LaunchConfiguration("namespace").perform(context)
-    tf_prefix = LaunchConfiguration("tf_prefix").perform(context)
 
     robot_desc_dict = (
         ParameterBuilder("group_a_description")
@@ -82,9 +76,8 @@ def launch_setup(context, launch_configs):
             "urdf/group_a.urdf.xacro",
             mappings={
                 "parent": parent_link, "xyz": xyz, "rpy": rpy,
-                "lift_type": lift_type, "ur_type": ur_type,
                 "sim_gazebo": sim_gazebo, "use_fake_hardware": use_fake_hardware,
-                "namespace": namespace, "tf_prefix": tf_prefix,
+                "namespace": namespace,
             },
         )
         .to_dict()
@@ -119,6 +112,14 @@ def launch_setup(context, launch_configs):
                 launch_configs['cuda_mps_client_priority'].perform(context),
         })
 
+    # tf2_ros hardcodes an absolute "/tf"/"/tf_static" internally - a
+    # ComposableNode's own `namespace=` does NOT touch that. Same strategy as
+    # group_a_bringup/launch/bringup.launch.py and agv_bringup/launch/
+    # bringup.launch.py (sibling internal_delivery_system_ws workspace): any
+    # node that reads/publishes tf needs this explicit remap to land on this
+    # robot's own /<namespace>/tf instead of the global /tf.
+    tf_remappings = [("/tf", "tf"), ("/tf_static", "tf_static")]
+
     # Static planning scene server
     static_planning_scene_server = ComposableNode(
         name='static_planning_scene_server',
@@ -131,6 +132,7 @@ def launch_setup(context, launch_configs):
         },
         {"use_sim_time": True if sim_gazebo == "true" else False}
         ],
+        remappings=tf_remappings,
     )
 
     cumotion_planner_node = ComposableNode(
@@ -142,6 +144,7 @@ def launch_setup(context, launch_configs):
             launch_configs,
             {"use_sim_time": True if sim_gazebo == "true" else False}
         ],
+        remappings=tf_remappings,
     )
 
     cumotion_container = ComposableNodeContainer(

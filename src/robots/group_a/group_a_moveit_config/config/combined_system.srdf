@@ -9,54 +9,24 @@
     <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
     <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
     <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
-    <group name="all">
-        <chain base_link="lift_base_link" tip_link="ur_ft_frame"/>
-    </group>
-    <group name="lift">
-        <chain base_link="lift_base_link" tip_link="lift_mount"/>
-    </group>
-    <group name="ur">
-        <chain base_link="ur_base_link" tip_link="ur_ft_frame"/>
+    <group name="manipulator">
+        <chain base_link="gp_base_link" tip_link="gp_tool0"/>
     </group>
     <!--VIRTUAL JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame of reference (considered fixed with respect to the robot)-->
-    <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="lift_base_link"/>
+    <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="gp_base_link"/>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
-    <disable_collisions link1="camera_link" link2="ur_wrist_1_link" reason="Never"/>
-    <disable_collisions link1="camera_link" link2="ur_wrist_2_link" reason="Never"/>
-    <disable_collisions link1="camera_link" link2="ur_wrist_3_link" reason="Adjacent"/>
-    <disable_collisions link1="lift_base_link" link2="lift_lower_link" reason="Adjacent"/>
-    <disable_collisions link1="lift_base_link" link2="lift_mount_link" reason="Never"/>
-    <disable_collisions link1="lift_base_link" link2="lift_plate_link" reason="Adjacent"/>
-    <disable_collisions link1="lift_base_link" link2="lift_upper_link" reason="Default"/>
-    <disable_collisions link1="lift_base_link" link2="ur_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="lift_base_link" link2="ur_shoulder_link" reason="Never"/>
-    <disable_collisions link1="lift_lower_link" link2="lift_mount_link" reason="Never"/>
-    <disable_collisions link1="lift_lower_link" link2="lift_plate_link" reason="Never"/>
-    <disable_collisions link1="lift_lower_link" link2="lift_upper_link" reason="Adjacent"/>
-    <disable_collisions link1="lift_lower_link" link2="ur_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="lift_lower_link" link2="ur_shoulder_link" reason="Never"/>
-    <disable_collisions link1="lift_lower_link" link2="ur_upper_arm_link" reason="Never"/>
-    <disable_collisions link1="lift_mount_link" link2="lift_plate_link" reason="Never"/>
-    <disable_collisions link1="lift_mount_link" link2="lift_upper_link" reason="Adjacent"/>
-    <disable_collisions link1="lift_mount_link" link2="ur_base_link_inertia" reason="Adjacent"/>
-    <disable_collisions link1="lift_mount_link" link2="ur_shoulder_link" reason="Never"/>
-    <disable_collisions link1="lift_plate_link" link2="lift_upper_link" reason="Never"/>
-    <disable_collisions link1="lift_plate_link" link2="ur_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="lift_plate_link" link2="ur_shoulder_link" reason="Never"/>
-    <disable_collisions link1="lift_plate_link" link2="ur_upper_arm_link" reason="Never"/>
-    <disable_collisions link1="lift_upper_link" link2="ur_base_link_inertia" reason="Never"/>
-    <disable_collisions link1="lift_upper_link" link2="ur_shoulder_link" reason="Never"/>
-    <disable_collisions link1="lift_upper_link" link2="ur_upper_arm_link" reason="Never"/>
-    <disable_collisions link1="lift_upper_link" link2="ur_wrist_1_link" reason="Never"/>
-    <disable_collisions link1="ur_base_link_inertia" link2="ur_shoulder_link" reason="Adjacent"/>
-    <disable_collisions link1="ur_base_link_inertia" link2="ur_upper_arm_link" reason="Never"/>
-    <disable_collisions link1="ur_base_link_inertia" link2="ur_wrist_1_link" reason="Never"/>
-    <disable_collisions link1="ur_forearm_link" link2="ur_upper_arm_link" reason="Adjacent"/>
-    <disable_collisions link1="ur_forearm_link" link2="ur_wrist_1_link" reason="Adjacent"/>
-    <disable_collisions link1="ur_shoulder_link" link2="ur_upper_arm_link" reason="Adjacent"/>
-    <disable_collisions link1="ur_shoulder_link" link2="ur_wrist_1_link" reason="Never"/>
-    <disable_collisions link1="ur_shoulder_link" link2="ur_wrist_2_link" reason="Never"/>
-    <disable_collisions link1="ur_wrist_1_link" link2="ur_wrist_2_link" reason="Adjacent"/>
-    <disable_collisions link1="ur_wrist_1_link" link2="ur_wrist_3_link" reason="Never"/>
-    <disable_collisions link1="ur_wrist_2_link" link2="ur_wrist_3_link" reason="Adjacent"/>
+    <disable_collisions link1="gp_base_link" link2="gp_link_1" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_1" link2="gp_link_2" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_2" link2="gp_link_3" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_3" link2="gp_link_4" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_4" link2="gp_link_5" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_5" link2="gp_link_6" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_6" link2="gp_flange" reason="Adjacent"/>
+    <disable_collisions link1="gp_flange" link2="gp_tool0" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_6" link2="gp_tool0" reason="Never"/>
+    <disable_collisions link1="camera_link" link2="gp_link_6" reason="Adjacent"/>
+    <disable_collisions link1="camera_link" link2="gp_flange" reason="Adjacent"/>
+    <disable_collisions link1="camera_link" link2="gp_tool0" reason="Adjacent"/>
+    <disable_collisions link1="gp_link_3" link2="gp_link_5" reason="Never"/>
+    <disable_collisions link1="gp_link_4" link2="gp_link_6" reason="Never"/>
 </robot>

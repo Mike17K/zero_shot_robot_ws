@@ -1,10 +1,14 @@
 # Default initial positions for combined_system's ros2_control fake system
+#
+# Mildly bent, not all-zeros: joint_5=0 puts GP70L's wrist in a singular
+# configuration (joint_4/joint_6 axes align) - offsetting it, along with a
+# slight elbow bend on joint_2/joint_3, keeps this a well-conditioned start
+# pose for planning.
 
 initial_positions:
-  lift_lower_joint: 0.001
-  ur_elbow_joint: 0
-  ur_shoulder_lift_joint: 0
-  ur_shoulder_pan_joint: 0
-  ur_wrist_1_joint: 0
-  ur_wrist_2_joint: 0
-  ur_wrist_3_joint: 0
+  gp_joint_1: 0
+  gp_joint_2: -0.349066 # -20 deg
+  gp_joint_3: 0.349066 # 20 deg
+  gp_joint_4: 0
+  gp_joint_5: -0.523599 # -30 deg, avoids the joint_5=0 wrist singularity
+  gp_joint_6: 0

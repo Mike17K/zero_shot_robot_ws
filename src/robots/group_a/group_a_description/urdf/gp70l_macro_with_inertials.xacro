@@ -1,0 +1,239 @@
+<?xml version="1.0"?>
+<!-- Local fork of motoman_gp70l_support/urdf/gp70l_macro.xacro (see
+     src/robots/motoman_ros2_support_packages), ONLY to add <inertial>
+     blocks - the vendored version ships none at all (visual/collision
+     only), which is fine for MoveIt/visualization but breaks Gazebo:
+     sdformat's urdf2sdf requires every link to have a mass, and silently
+     drops a link (and everything downstream of it in the kinematic chain)
+     that doesn't - confirmed live: gp_link_1 had no <inertial>, so
+     urdf2sdf dropped gp_joint_1 and everything past it, leaving "a model
+     must have at least one link" and robot_1 never actually spawning in
+     Gazebo, even though the spawn request itself reported success.
+
+     Why a local fork instead of editing the submodule in place: this repo
+     already has a precedent for this exact situation
+     (src/isaac_ros_cumotion_fork, "forked isaac_ros_cumotion and applied a
+     fix") - but that's a fork of the whole upstream repo under our own
+     GitHub account. We don't have (and this one-file fix doesn't warrant)
+     a full fork of Yaskawa's multi-robot monorepo, so instead this is a
+     single patched file living in OUR OWN package, keeping the vendored
+     submodule itself pristine/upstream-trackable. group_a_macro.xacro
+     includes THIS file, not motoman_gp70l_support's own gp70l_macro.xacro.
+
+     Mass/inertia values below are placeholder engineering estimates (solid
+     cylinder/sphere approximations using each link's own joint-to-joint
+     offset as its length and the same per-link radius guesses used in
+     planning_bringup/config/group_a/group_a.xrdf's collision spheres), NOT
+     vendor-specified - good enough for stable physics simulation, not for
+     dynamics-accurate control. Replace with real values (from the
+     vendored STL collision meshes, or the vendor's own CAD data) if that
+     ever matters.
+
+     Everything else (link names, mesh references, joint origins/axes/
+     limits, the base/flange/tool0 frames) is copied verbatim from the
+     vendored file - keep those two in sync if Yaskawa ever updates it.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="motoman_gp70l" params="prefix">
+    <xacro:include filename="$(find motoman_resources)/urdf/common_materials.xacro"/>
+
+    <!-- link list -->
+    <link name="${prefix}base_link">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/base_link.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/base_link.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0.27" rpy="0 0 0" />
+        <mass value="150.0" />
+        <inertia ixx="5.805" ixy="0.0" ixz="0.0" iyy="5.805" iyz="0.0" izz="4.32" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_1">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_1.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_1.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0.16 0 0" rpy="0 0 0" />
+        <mass value="80.0" />
+        <inertia ixx="1.936" ixy="0.0" ixz="0.0" iyy="1.65067" iyz="0.0" izz="1.65067" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_2">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_2.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_2.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0.5825" rpy="0 0 0" />
+        <mass value="120.0" />
+        <inertia ixx="14.24725" ixy="0.0" ixz="0.0" iyy="14.24725" iyz="0.0" izz="1.35" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_3">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_3.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_3.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0.6125 0 0.1175" rpy="0 0 0" />
+        <mass value="90.0" />
+        <inertia ixx="0.7605" ixy="0.0" ixz="0.0" iyy="11.63494" iyz="0.0" izz="11.63494" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_4">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_4.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_4.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <mass value="40.0" />
+        <inertia ixx="0.2304" ixy="0.0" ixz="0.0" iyy="0.2304" iyz="0.0" izz="0.2304" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_5">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_5.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_blue/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_5.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <mass value="25.0" />
+        <inertia ixx="0.1" ixy="0.0" ixz="0.0" iyy="0.1" iyz="0.0" izz="0.1" />
+      </inertial>
+    </link>
+    <link name="${prefix}link_6">
+      <visual>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/visual/link_6.dae"/>
+        </geometry>
+        <xacro:material_yaskawa_silver/>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://motoman_gp70l_support/meshes/gp70l/collision/link_6.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0.0875 0 0" rpy="0 0 0" />
+        <mass value="10.0" />
+        <inertia ixx="0.0405" ixy="0.0" ixz="0.0" iyy="0.04577" iyz="0.0" izz="0.04577" />
+      </inertial>
+    </link>
+    <!-- end of link list -->
+
+    <!-- joint list -->
+    <joint name="${prefix}joint_1" type="revolute">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}link_1"/>
+      <origin xyz="0 0 0.540" rpy="0 0 0" />
+      <axis xyz="0 0 1" />
+      <limit lower="${radians(-180)}" upper="${radians(180)}" effort="3983.9" velocity="${radians(180)}"/>
+    </joint>
+    <joint name="${prefix}joint_2" type="revolute">
+      <parent link="${prefix}link_1"/>
+      <child link="${prefix}link_2"/>
+      <origin xyz="0.320 0 0" rpy="0 0 0" />
+      <axis xyz="0 1 0" />
+      <limit lower="${radians(-90)}" upper="${radians(155)}" effort="10174.4" velocity="${radians(123)}"/>
+    </joint>
+    <joint name="${prefix}joint_3" type="revolute">
+      <parent link="${prefix}link_2"/>
+      <child link="${prefix}link_3"/>
+      <origin xyz="0 0 1.165" rpy="0 0 0" />
+      <axis xyz="0 -1 0" />
+      <limit lower="${radians(-80)}" upper="${radians(90)}" effort="5148.4" velocity="${radians(160)}"/>
+    </joint>
+    <joint name="${prefix}joint_4" type="revolute">
+      <parent link="${prefix}link_3"/>
+      <child link="${prefix}link_4"/>
+      <origin xyz="1.225 0 0.235" rpy="0 0 0" />
+      <axis xyz="-1 0 0" />
+      <limit lower="${radians(-360)}" upper="${radians(360)}" effort="823.7" velocity="${radians(230)}"/>
+    </joint>
+    <joint name="${prefix}joint_5" type="revolute">
+      <parent link="${prefix}link_4"/>
+      <child link="${prefix}link_5"/>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <axis xyz="0 -1 0" />
+      <limit lower="${radians(-125)}" upper="${radians(125)}" effort="794.3" velocity="${radians(230)}"/>
+    </joint>
+    <joint name="${prefix}joint_6" type="revolute">
+      <parent link="${prefix}link_5"/>
+      <child link="${prefix}link_6"/>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <axis xyz="-1 0 0" />
+      <limit lower="${radians(-360)}" upper="${radians(360)}" effort="333.4" velocity="${radians(350)}"/>
+    </joint>
+    <!-- end of joint list -->
+
+    <!-- ROS base_link to Robot Manufacturer World Coordinates transform -->
+    <link name="${prefix}base" />
+    <joint name="${prefix}base_link-base" type="fixed">
+      <origin xyz="0 0 0.540" rpy="0 0 0"/>
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}base"/>
+    </joint>
+
+    <!-- ROS-Industrial 'flange' frame, attachment point for EEF models -->
+    <link name="${prefix}flange"/>
+    <joint name="${prefix}joint_6-flange" type="fixed">
+      <origin xyz="0.175 0 0" rpy="0 0 0"/>
+      <parent link="${prefix}link_6"/>
+      <child link="${prefix}flange"/>
+    </joint>
+
+    <!-- ROS-Industrial 'tool0' frame, all-zeros tool frame -->
+    <link name="${prefix}tool0"/>
+    <joint name="${prefix}flange-tool0" type="fixed">
+      <origin xyz="0 0 0" rpy="${radians(180)} ${radians(-90)} 0"/>
+      <parent link="${prefix}flange"/>
+      <child link="${prefix}tool0"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

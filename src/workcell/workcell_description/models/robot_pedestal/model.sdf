@@ -1,0 +1,33 @@
+<sdf version="1.10">
+  <model name="robot_pedestal">
+    <static>true</static>
+    <link name="pedestal_link">
+      <!-- 1.12 x 1.12 x 0.4 - sized for the GP70L (heavy floor-mounted
+           industrial arm, ~2m+ reach): footprint scaled up from the earlier
+           UR10 pedestal (0.7 x 0.7), but shorter (0.4 vs 0.85) since GP70L's
+           own base+joint_1 already adds 0.54m of height before the arm even
+           starts moving - see group_a_description/urdf/group_a_macro.xacro
+           and workcell_bringup/launch/workcell.launch.py's layout comment. -->
+      <visual name="pedestal_visual">
+        <pose>0 0 0.2 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>1.12 1.12 0.4</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.55 0.55 0.58 1</ambient>
+          <diffuse>0.55 0.55 0.58 1</diffuse>
+        </material>
+      </visual>
+      <collision name="pedestal_collision">
+        <pose>0 0 0.2 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>1.12 1.12 0.4</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>
