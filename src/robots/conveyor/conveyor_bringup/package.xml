@@ -16,6 +16,12 @@
   <depend>xacro</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <!-- box_factory.py: spawns through gripper_manager's custom_msgs/SpawnBox
+       service and watches the spawn area over gz-transport directly. -->
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
+  <exec_depend>gz_transport_vendor</exec_depend>
+  <exec_depend>gz_msgs_vendor</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

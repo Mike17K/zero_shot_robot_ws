@@ -40,10 +40,11 @@ source install/setup.bash
 after you can open a new terminal and just run the bellow and keep away from pressing any buttons for a while until the setup is finished
 
 ```bash
-bash scripts/launch/launch_ws.sh
+bash scripts/launch/launch_from_host_ws.sh       # from a host terminal (each pane enters the container)
+bash scripts/launch/launch_from_container_ws.sh  # from a shell already inside the container
 ```
 
-this will open the terminator with the commands ready to run
+this will open the terminator with the commands ready to run. Press Enter in each pane in this order: Workcell (Gazebo), cuMotion planner, RViz, Teleop UI, then the Navigator CLI once the robot is up. The pane plan lives in `scripts/launch/panels.sh`.
 
 ## Layout
 
@@ -51,10 +52,12 @@ this will open the terminator with the commands ready to run
 | ----------------------------- | -------------------------------------------------------------------------------------- |
 | `src/workcell`                | Gazebo world + shared workcell description                                             |
 | `src/robots/group_a`          | Robot description + MoveIt config for group_a (GP70L arm + Orbbec camera)              |
-| `src/robots/conveyor`         | Parametric, actuated conveyor belt description + bringup, spawned per-instance         |
+| `src/robots/conveyor`         | Parametric, actuated conveyor belt description + bringup, spawned per-instance, plus `box_factory` (random boxes on the infeed) |
 | `src/robots/motoman_ros2_support_packages` | Submodule (sparse), [Yaskawa-Global/motoman_ros2_support_packages](https://github.com/Yaskawa-Global/motoman_ros2_support_packages) — GP70L arm description |
-| `src/workcell/workcell_teleop` | PyQt teleop UI: robot joint-position sliders + conveyor speed sliders                 |
-| `src/planning_bringup`        | cuMotion planning launch/config                                                        |
+| `src/workcell/workcell_teleop` | PyQt teleop UI: joint sliders, gripper toggle, conveyor speeds, Spawn Box and Box Factory controls |
+| `src/planning/planning_bringup` | cuMotion planning launch/config (XRDF: `config/group_a/group_a.xrdf`)              |
+| `src/planning/navigator_cli`  | Interactive pose-graph navigator (cuMotion planning + trajectory controller)          |
+| `src/shared_utils`            | Shared ROS helpers: cuMotion client, trajectory executor, TF, joint states            |
 | `src/vision`                  | nvblox launch/config                                                                   |
 | `src/isaac_ros_cumotion_fork` | Submodule, [Mike17K/isaac_ros_cumotion](https://github.com/Mike17K/isaac_ros_cumotion) |
 | `Dockerfile.cumotion_ws`      | Layer added on top of the Isaac ROS base image                                         |
@@ -77,7 +80,7 @@ Inside the container, `workcell_teleop` needs `python3-pyqt5` — `make rosdeps`
 | `entrypoint.sh`         | Container entrypoint, runs `make`                                                 |
 | `setup_workspace.sh`    | First-boot dependency install inside the container                                |
 | `setup_host.sh`         | One-off host setup (NVIDIA container toolkit + isaac-ros-cli)                     |
-| `launch/launch_ws.sh`   | Opens a Terminator layout and launches workcell / cuMotion / RViz / nvblox / teleop panels |
+| `launch/launch_from_{host,container}_ws.sh` | Opens a Terminator layout with workcell / cuMotion / RViz / nvblox / teleop / navigator panels (plan in `launch/panels.sh`) |
 
 ## Build & run (inside the container)
 
@@ -91,10 +94,12 @@ Then, e.g.:
 
 ```bash
 ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardware:=false
-ros2 launch planning_bringup cumotion.launch.py
+ros2 launch planning_bringup cumotion.launch.py namespace:=robot_1 sim_gazebo:=true
 ros2 launch vision nvblox.launch.py
 ros2 launch workcell_bringup rviz.launch.py rviz_namespace:=robot_1
 ros2 launch workcell_teleop teleop.launch.py   # joint sliders + conveyor speed sliders
+ros2 run navigator_cli navigator_cli            # pose-graph navigator (see src/planning/navigator_cli)
+ros2 run shared_utils cumotion_cli joints 0 -0.35 0.35 0 -0.52 0   # one-shot planner check
 ```
 
 ## References

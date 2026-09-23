@@ -3,7 +3,9 @@
 single-point JointTrajectory messages straight to
 <namespace>/gp70l_joint_trajectory_controller/joint_trajectory - the same
 topic interface MoveIt's own trajectory execution uses, just fed directly
-instead of through planning), a gripper ON/OFF toggle per robot, speed
+instead of through planning; "Refresh from robot" pulls the sliders to the
+actual joint states without moving anything, and happens once automatically
+on the first joint state), a gripper ON/OFF toggle per robot, speed
 sliders per conveyor (sent as std_msgs/Float64 on <namespace>/target_speed,
 picked up by each belt's own belt_speed_relay - see
 conveyor_bringup/scripts/belt_speed_relay.py - which fans it out to that
@@ -29,10 +31,17 @@ back; it knows nothing about objects, joints or Gazebo. Suction is a latching
 state rather than a one-shot grab - ON keeps capturing whatever enters the
 gripper's footprint, OFF releases everything - and the number of spawnable /
 graspable objects is unbounded. See gripper_manager.py's own docstring.
+
+Box Factory: another thin client. The panel only sets ROS parameters on
+conveyor_bringup's box_factory node (enabled, period_sec, time_randomness,
+shape_randomness, size_min, size_max - see box_factory.py's docstring), which
+does all the random sampling and spawning itself, so the stream keeps running
+even if this UI is closed. Every change pushes the whole panel state.
 """
 import math
 import os
 import sys
+from typing import Optional
 
 import rclpy
 import yaml
@@ -40,6 +49,9 @@ from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Duration
 from PyQt5 import QtCore, QtWidgets
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rclpy.parameter_client import AsyncParameterClient
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
 from std_srvs.srv import SetBool
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -95,6 +107,7 @@ class TeleopNode(Node):
         self.declare_parameter('spawn_x', DEFAULT_SPAWN_X)
         self.declare_parameter('spawn_y', DEFAULT_SPAWN_Y)
         self.declare_parameter('spawn_z', DEFAULT_SPAWN_Z)
+        self.declare_parameter('box_factory_node', '/box_factory')
 
         self.robot_namespaces: list[str] = list(self.get_parameter('robot_namespaces').value)
         self.robot_joint_names: list[str] = list(self.get_parameter('robot_joint_names').value)
@@ -104,6 +117,8 @@ class TeleopNode(Node):
         self.spawn_x: float = float(self.get_parameter('spawn_x').value)
         self.spawn_y: float = float(self.get_parameter('spawn_y').value)
         self.spawn_z: float = float(self.get_parameter('spawn_z').value)
+
+        self._factory_params = AsyncParameterClient(self, self.get_parameter('box_factory_node').value)
 
         self.joint_limits = _load_joint_limits(joint_limits_package, self.robot_joint_names)
 
@@ -126,6 +141,25 @@ class TeleopNode(Node):
             ns: self.create_client(SpawnBox, f'/{ns}/gripper/spawn_box')
             for ns in self.robot_namespaces
         }
+        # Latest JointState per robot, for the panels' Refresh button (depth 1:
+        # only the newest message matters, and spin_once drains one callback
+        # per Qt tick).
+        self._joint_states: dict[str, JointState] = {}
+        for ns in self.robot_namespaces:
+            self.create_subscription(
+                JointState, f'/{ns}/joint_states',
+                lambda msg, ns=ns: self._joint_states.__setitem__(ns, msg), 1)
+
+    def current_joint_positions(self, robot_ns: str) -> Optional[list[float]]:
+        """The robot's actual joint positions in robot_joint_names order, or
+        None if no joint state has arrived yet (or a joint is missing)."""
+        msg = self._joint_states.get(robot_ns)
+        if msg is None:
+            return None
+        index = {name: i for i, name in enumerate(msg.name)}
+        if any(name not in index for name in self.robot_joint_names):
+            return None
+        return [msg.position[index[name]] for name in self.robot_joint_names]
 
     def send_joint_positions(self, robot_ns: str, positions: list[float]) -> None:
         pub = self._traj_pubs.get(robot_ns)
@@ -194,6 +228,25 @@ class TeleopNode(Node):
         request.z = float(z)
         return self._call_service(client, request, 'gripper/spawn_box')
 
+    def configure_factory(self, config: dict, on_done) -> None:
+        """Non-blocking: box_factory applies the parameters on its own timer,
+        on_done(ok, message) runs from the ROS spin once it has answered."""
+        if not self._factory_params.services_are_ready():
+            on_done(False, 'box_factory unavailable (not running yet?)')
+            return
+        params = [Parameter(name, value=value) for name, value in config.items()]
+        future = self._factory_params.set_parameters(params)
+
+        def _done(fut):
+            result = fut.result()
+            if result is None:
+                on_done(False, f'set_parameters failed: {fut.exception()}')
+                return
+            failed = [r.reason for r in result.results if not r.successful]
+            on_done(not failed, '; '.join(failed) if failed else 'factory updated')
+
+        future.add_done_callback(_done)
+
 
 class JointSliderRow(QtWidgets.QWidget):
     changed = QtCore.pyqtSignal()
@@ -234,24 +287,31 @@ class JointSliderRow(QtWidgets.QWidget):
         self.value_label.setText(f'{math.degrees(self._rad):6.1f} deg')
         self.changed.emit()
 
-    def set_rad(self, rad: float) -> None:
+    def set_rad(self, rad: float, emit: bool = True) -> None:
+        """emit=False only moves the slider (no `changed`, so no command)."""
         step = self._rad_to_step(rad)
         self.slider.blockSignals(True)
         self.slider.setValue(step)
         self.slider.blockSignals(False)
-        self._on_slider_changed(step)
+        self._rad = self._step_to_rad(step)
+        self.value_label.setText(f'{math.degrees(self._rad):6.1f} deg')
+        if emit:
+            self.changed.emit()
 
     def get_rad(self) -> float:
         return self._rad
 
 
 class RobotPanel(QtWidgets.QGroupBox):
-    def __init__(self, robot_ns: str, joint_names: list[str], joint_limits: dict, on_change, on_gripper, parent=None):
+    def __init__(self, robot_ns: str, joint_names: list[str], joint_limits: dict, on_change, on_gripper,
+                 read_joints, parent=None):
         super().__init__(f'Robot: {robot_ns}', parent)
         self.robot_ns = robot_ns
         self.joint_names = joint_names
         self.on_change = on_change
         self.on_gripper = on_gripper
+        self.read_joints = read_joints  # () -> Optional[list[float]], the robot's actual joints
+        self.synced_once = False
         self.rows: dict[str, JointSliderRow] = {}
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -266,6 +326,13 @@ class RobotPanel(QtWidgets.QGroupBox):
         home_btn = QtWidgets.QPushButton('Home (all 0)')
         home_btn.clicked.connect(self._go_home)
         buttons.addWidget(home_btn)
+        # Pull the sliders to where the arm really is - e.g. after
+        # navigator_cli or MoveIt moved it - so the next slider touch does
+        # not make the arm jump back to stale slider values.
+        refresh_btn = QtWidgets.QPushButton('Refresh from robot')
+        refresh_btn.setToolTip('Set the sliders to the current joint states (does not move the arm)')
+        refresh_btn.clicked.connect(self.refresh_from_robot)
+        buttons.addWidget(refresh_btn)
         buttons.addStretch(1)
 
         self.gripper_btn = QtWidgets.QPushButton()
@@ -293,8 +360,19 @@ class RobotPanel(QtWidgets.QGroupBox):
 
     def _go_home(self) -> None:
         for row in self.rows.values():
-            row.set_rad(0.0)
-        self._on_row_changed()
+            row.set_rad(0.0, emit=False)
+        self._on_row_changed()  # one command for all joints
+
+    def refresh_from_robot(self) -> bool:
+        positions = self.read_joints()
+        if positions is None:
+            self.gripper_status_label.setText(f'FAILED: no joint states on /{self.robot_ns}/joint_states yet')
+            return False
+        for name, rad in zip(self.joint_names, positions):
+            self.rows[name].set_rad(rad, emit=False)
+        self.synced_once = True
+        self.gripper_status_label.setText('OK: sliders set to the current joint states')
+        return True
 
     def _on_gripper_toggled(self, checked: bool) -> None:
         self._set_gripper_style(checked)
@@ -417,6 +495,114 @@ class SpawnPanel(QtWidgets.QGroupBox):
         self.spawn_btn.setEnabled(True)
 
 
+class FactoryPanel(QtWidgets.QGroupBox):
+    """Controls for box_factory (see the module docstring). Defaults mirror
+    box_factory.py's own parameter defaults - the node itself starts
+    disabled, so nothing runs until the checkbox is ticked."""
+    _SIZE_LIMITS = (0.05, 0.40)  # same range as the Spawn Box panel
+
+    def __init__(self, on_configure, parent=None):
+        super().__init__('Box Factory', parent)
+        self.on_configure = on_configure
+
+        self.enabled_check = QtWidgets.QCheckBox('Factory active')
+        self.period_spin = QtWidgets.QDoubleSpinBox()
+        self.period_spin.setRange(0.2, 60.0)
+        self.period_spin.setSingleStep(0.5)
+        self.period_spin.setDecimals(1)
+        self.period_spin.setValue(3.0)
+        self.period_spin.setSuffix(' s')
+
+        self.time_rand = self._make_percent_slider(30)
+        self.shape_rand = self._make_percent_slider(50)
+
+        form = QtWidgets.QFormLayout()
+        form.addRow(self.enabled_check)
+        form.addRow('Spawn every', self.period_spin)
+        form.addRow('Time randomization', self.time_rand)
+        form.addRow('Size/pose randomization', self.shape_rand)
+
+        # Per-edge min/max, one row per dimension.
+        sizes = QtWidgets.QGridLayout()
+        sizes.addWidget(QtWidgets.QLabel('min, m'), 0, 1)
+        sizes.addWidget(QtWidgets.QLabel('max, m'), 0, 2)
+        self.min_spins, self.max_spins = [], []
+        for row, (label, lo, hi) in enumerate(
+                (('Width (X)', 0.10, 0.30), ('Depth (Y)', 0.10, 0.35), ('Height (Z)', 0.08, 0.25)), start=1):
+            min_spin, max_spin = self._make_size_spin(lo), self._make_size_spin(hi)
+            min_spin.valueChanged.connect(lambda v, m=max_spin: m.setValue(max(m.value(), v)))
+            max_spin.valueChanged.connect(lambda v, m=min_spin: m.setValue(min(m.value(), v)))
+            sizes.addWidget(QtWidgets.QLabel(label), row, 0)
+            sizes.addWidget(min_spin, row, 1)
+            sizes.addWidget(max_spin, row, 2)
+            self.min_spins.append(min_spin)
+            self.max_spins.append(max_spin)
+
+        self.status_label = QtWidgets.QLabel('')
+        self.status_label.setWordWrap(True)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addLayout(sizes)
+        layout.addWidget(self.status_label)
+
+        self.enabled_check.toggled.connect(self._push)
+        self.period_spin.valueChanged.connect(self._push)
+        for slider in (self.time_rand, self.shape_rand):
+            slider.findChild(QtWidgets.QSlider).valueChanged.connect(self._push)
+        for spin in self.min_spins + self.max_spins:
+            spin.valueChanged.connect(self._push)
+
+    @staticmethod
+    def _make_percent_slider(default: int) -> QtWidgets.QWidget:
+        box = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        slider.setRange(0, 100)
+        label = QtWidgets.QLabel()
+        label.setMinimumWidth(40)
+        slider.valueChanged.connect(lambda v: label.setText(f'{v}%'))
+        slider.setValue(default)
+        label.setText(f'{default}%')
+        row.addWidget(slider, 1)
+        row.addWidget(label)
+        return box
+
+    @classmethod
+    def _make_size_spin(cls, default: float) -> QtWidgets.QDoubleSpinBox:
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(*cls._SIZE_LIMITS)
+        spin.setSingleStep(0.01)
+        spin.setDecimals(2)
+        spin.setValue(default)
+        return spin
+
+    @staticmethod
+    def _percent(slider_box: QtWidgets.QWidget) -> float:
+        return slider_box.findChild(QtWidgets.QSlider).value() / 100.0
+
+    def config(self) -> dict:
+        return {
+            'enabled': self.enabled_check.isChecked(),
+            'period_sec': self.period_spin.value(),
+            'time_randomness': self._percent(self.time_rand),
+            'shape_randomness': self._percent(self.shape_rand),
+            'size_min': [s.value() for s in self.min_spins],
+            'size_max': [s.value() for s in self.max_spins],
+        }
+
+    def _push(self, *_args) -> None:
+        self.on_configure(self.config(), self._on_result)
+
+    def _on_result(self, ok: bool, message: str) -> None:
+        self.status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
+        if not ok and self.enabled_check.isChecked():
+            self.enabled_check.blockSignals(True)
+            self.enabled_check.setChecked(False)
+            self.enabled_check.blockSignals(False)
+
+
 class TeleopMainWindow(QtWidgets.QMainWindow):
     def __init__(self, node: TeleopNode):
         super().__init__()
@@ -429,9 +615,12 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
 
         robots_col = QtWidgets.QVBoxLayout()
         robots_col.addWidget(QtWidgets.QLabel('<b>Robots</b>'))
+        self._robot_panels: list[RobotPanel] = []
         for ns in node.robot_namespaces:
-            panel = RobotPanel(ns, node.robot_joint_names, node.joint_limits, self._on_robot_changed, self._on_gripper_toggled)
+            panel = RobotPanel(ns, node.robot_joint_names, node.joint_limits, self._on_robot_changed,
+                               self._on_gripper_toggled, lambda ns=ns: node.current_joint_positions(ns))
             robots_col.addWidget(panel)
+            self._robot_panels.append(panel)
         robots_col.addStretch(1)
 
         conveyors_col = QtWidgets.QVBoxLayout()
@@ -444,19 +633,29 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         scene_col = QtWidgets.QVBoxLayout()
         scene_col.addWidget(QtWidgets.QLabel('<b>Scene</b>'))
         scene_col.addWidget(SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z))
+        scene_col.addWidget(FactoryPanel(self.node.configure_factory))
         scene_col.addStretch(1)
 
         outer.addLayout(robots_col, 2)
         outer.addLayout(conveyors_col, 1)
         outer.addLayout(scene_col, 1)
 
-        # Nothing here currently subscribes to anything (pure command UI),
-        # but pumping the executor keeps the node responsive to ROS-side
+        # Nothing here subscribes to anything (pure command UI), but pumping
+        # the executor completes box_factory's async set_parameters replies
+        # (FactoryPanel status) and keeps the node responsive to ROS-side
         # events (parameter changes, discovery) without blocking Qt's own
         # event loop - spin_once/spin can't run in the same thread as exec_().
         self._ros_timer = QtCore.QTimer(self)
-        self._ros_timer.timeout.connect(lambda: rclpy.spin_once(self.node, timeout_sec=0))
+        self._ros_timer.timeout.connect(self._on_ros_tick)
         self._ros_timer.start(50)
+
+    def _on_ros_tick(self) -> None:
+        rclpy.spin_once(self.node, timeout_sec=0)
+        # Sliders start at 0 while the arm is wherever it is - sync them once
+        # as soon as each robot's first joint state arrives.
+        for panel in self._robot_panels:
+            if not panel.synced_once and self.node.current_joint_positions(panel.robot_ns) is not None:
+                panel.refresh_from_robot()
 
     def _on_robot_changed(self, robot_ns: str, positions: list[float]) -> None:
         self.node.send_joint_positions(robot_ns, positions)
@@ -477,7 +676,7 @@ def main():
 
     app = QtWidgets.QApplication(sys.argv)
     win = TeleopMainWindow(node)
-    win.resize(1150, 650)
+    win.resize(1150, 850)
     win.show()
     try:
         app.exec_()

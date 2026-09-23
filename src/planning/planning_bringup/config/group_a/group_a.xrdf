@@ -51,25 +51,22 @@ self_collision:
     gp_tool0: 0.05
     gripper_plate_link: 0.02
   ignore:
-    # Adjacent-link ignores, matching combined_system.srdf.xacro's
-    # disable_collisions entries.
+    # combined_system.srdf.xacro's disable_collisions pairs (Adjacent and
+    # Never), limited to frames that HAVE spheres here - cuMotion warns about
+    # and drops pairs naming sphere-less frames (gp_tool0, camera_link,
+    # gripper_tcp, suction cups). The wrist links sit within a few cm of each
+    # other around the wrist centre, so they can only collide through these
+    # placeholder spheres, never physically.
     gp_base_link: ["gp_link_1"]
     gp_link_1: ["gp_link_2"]
     gp_link_2: ["gp_link_3"]
-    gp_link_3: ["gp_link_4"]
-    gp_link_4: ["gp_link_5"]
+    gp_link_3: ["gp_link_4", "gp_link_5"]
+    # gp_link_4's sphere sits on the wrist centre, which every wrist joint
+    # rotates about - its distance to the plate never changes, so the pair
+    # carries no information (forearm vs gripper is caught by gp_link_3).
+    gp_link_4: ["gp_link_5", "gp_link_6", "gripper_plate_link"]
     gp_link_5: ["gp_link_6"]
-    gp_link_6: ["gp_tool0"]
-    gp_tool0: ["gripper_plate_link"]
-    gripper_plate_link:
-      [
-        "camera_link",
-        "gripper_tcp",
-        "suction_cup_1_link", "suction_cup_2_link", "suction_cup_3_link",
-        "suction_cup_4_link", "suction_cup_5_link", "suction_cup_6_link",
-        "suction_cup_7_link", "suction_cup_8_link", "suction_cup_9_link",
-        "suction_cup_10_link", "suction_cup_11_link", "suction_cup_12_link",
-      ]
+    gp_link_6: ["gripper_plate_link"]
 
 geometry:
   combined_robot_collision_spheres:
@@ -86,8 +83,6 @@ geometry:
         - center: [0.0, 0.0, 0.0]
           radius: 0.24
         - center: [0.0, 0.0, 0.27]
-          radius: 0.24
-        - center: [0.0, 0.0, 0.54]
           radius: 0.24
       gp_link_1:
         - center: [0.0, 0.0, 0.0]
@@ -117,8 +112,6 @@ geometry:
         - center: [0.735, 0.0, 0.141]
           radius: 0.13
         - center: [0.98, 0.0, 0.188]
-          radius: 0.13
-        - center: [1.225, 0.0, 0.235]
           radius: 0.13
       gp_link_4:
         - center: [0.0, 0.0, 0.0]

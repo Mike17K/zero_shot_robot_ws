@@ -1,9 +1,7 @@
-# Spawn a new box of the given size at the given world-frame position into
-# gripper_manager's round-robin slot pool - see gripper_manager.py and
-# group_a_description/urdf/group_a_macro.xacro's gripper_slot comment for
-# why a fixed slot pool exists at all (DetachableJoint's own child_model is
-# a static string baked into the URDF at build time, not retargetable at
-# runtime).
+# Spawn one new dynamic box of the given size at the given world-frame pose -
+# see group_a_bringup/scripts/gripper_manager.py (serves it) and
+# conveyor_bringup/scripts/box_factory.py (calls it on a timer with randomized
+# fields). The model name comes from gripper_manager, so the box is graspable.
 
 float64 width
 float64 depth
@@ -11,6 +9,13 @@ float64 height
 float64 x
 float64 y
 float64 z
+# Rotation about world Z, radians. 0 = box axes aligned with the world axes.
+float64 yaw
+# Appearance. Empty rgb -> the default cardboard tan; otherwise exactly 3
+# values in [0, 1]. albedo_map is an absolute path to an image file used as the
+# box's texture (empty -> plain color only).
+float64[] rgb
+string albedo_map
 ---
 bool success
 string message

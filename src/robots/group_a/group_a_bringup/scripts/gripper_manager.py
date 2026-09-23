@@ -50,7 +50,9 @@ No bridge entries and no subprocesses are involved.
 ROS interface (namespaced per robot):
   gripper/set_suction (std_srvs/srv/SetBool)     - suction on/off
   gripper/spawn_box   (custom_msgs/srv/SpawnBox) - spawn one dynamic box
+                                                  (also used by conveyor_bringup's box_factory)
 """
+import math
 import threading
 
 import rclpy
@@ -90,7 +92,7 @@ _BOX_SDF_TEMPLATE = """<?xml version="1.0"?>
         <geometry><box><size>{w} {d} {h}</size></box></geometry>
         <material>
           <ambient>{r} {g} {b} 1</ambient>
-          <diffuse>{r} {g} {b} 1</diffuse>
+          <diffuse>{r} {g} {b} 1</diffuse>{pbr}
         </material>
       </visual>
       <collision name="collision">
@@ -102,17 +104,26 @@ _BOX_SDF_TEMPLATE = """<?xml version="1.0"?>
 """
 
 
-def _box_sdf(model_name: str, link_name: str, w: float, d: float, h: float) -> str:
+_PBR_TEMPLATE = """
+          <pbr><metal>
+            <albedo_map>{albedo_map}</albedo_map>
+            <roughness>0.9</roughness><metalness>0.0</metalness>
+          </metal></pbr>"""
+
+
+def _box_sdf(model_name: str, link_name: str, w: float, d: float, h: float,
+             rgb=BOX_COLOR_RGB, albedo_map: str = '') -> str:
     # Pose is NOT in the SDF: EntityFactory.pose places the model instead.
     mass = max(BOX_MIN_MASS_KG, BOX_DENSITY_KG_M3 * w * d * h)
-    r, g, b = BOX_COLOR_RGB
+    r, g, b = rgb
+    pbr = _PBR_TEMPLATE.format(albedo_map=albedo_map) if albedo_map else ''
     return _BOX_SDF_TEMPLATE.format(
         model_name=model_name, link_name=link_name,
         w=w, d=d, h=h, mass=mass,
         ixx=mass * (d * d + h * h) / 12.0,
         iyy=mass * (w * w + h * h) / 12.0,
         izz=mass * (w * w + d * d) / 12.0,
-        r=r, g=g, b=b,
+        r=r, g=g, b=b, pbr=pbr,
     )
 
 
@@ -359,16 +370,24 @@ class GripperManager(Node):
                 return name
 
     def _on_spawn_box(self, request, response):
+        if request.rgb and len(request.rgb) != 3:
+            response.success = False
+            response.message = f'rgb must be empty or have 3 values, got {len(request.rgb)}'
+            return response
+        rgb = (tuple(min(1.0, max(0.0, c)) for c in request.rgb)
+               if request.rgb else BOX_COLOR_RGB)
         model_name = self._next_box_name()
         req = EntityFactory()
         req.sdf = _box_sdf(model_name, self.spawn_link_name,
-                           request.width, request.depth, request.height)
+                           request.width, request.depth, request.height,
+                           rgb=rgb, albedo_map=request.albedo_map)
         req.name = model_name
         req.allow_renaming = False
         req.pose.position.x = request.x
         req.pose.position.y = request.y
         req.pose.position.z = request.z
-        req.pose.orientation.w = 1.0
+        req.pose.orientation.z = math.sin(request.yaw / 2.0)
+        req.pose.orientation.w = math.cos(request.yaw / 2.0)
 
         ok, rep = self._gz.request(self._svc_create, req, EntityFactory, Boolean,
                                    GZ_SERVICE_TIMEOUT_MS)
@@ -382,7 +401,8 @@ class GripperManager(Node):
         response.success = True
         response.message = (
             f'spawned {model_name} ({request.width:.2f}x{request.depth:.2f}x'
-            f'{request.height:.2f}m) at ({request.x:.2f}, {request.y:.2f}, {request.z:.2f})')
+            f'{request.height:.2f}m) at ({request.x:.2f}, {request.y:.2f}, {request.z:.2f}) '
+            f'yaw={math.degrees(request.yaw):.0f}deg')
         return response
 
     def destroy_node(self):

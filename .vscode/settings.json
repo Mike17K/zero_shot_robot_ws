@@ -72,5 +72,23 @@
     "**/build/**": true,
     "**/install/**": true,
     "**/log/**": true
-  }
+  },
+  "python.autoComplete.extraPaths": [
+    "/workspaces/isaac_ros-dev/build/workcell_teleop",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/workcell_teleop/lib/python3.12/site-packages",
+    "/workspaces/isaac_ros-dev/build/workcell_bringup",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/workcell_bringup/lib/python3.12/site-packages",
+    "/workspaces/isaac_ros-dev/build/vision",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/vision/lib/python3.12/site-packages",
+    "/workspaces/isaac_ros-dev/build/planning_bringup",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/planning_bringup/lib/python3.12/site-packages",
+    "/workspaces/isaac_ros-dev/build/isaac_ros_cumotion_examples",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/isaac_ros_cumotion_examples/lib/python3.12/site-packages",
+    "/workspaces/isaac_ros-dev/build/isaac_ros_cumotion_robot_description",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/isaac_ros_cumotion_robot_description/lib/python3.12/site-packages",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/isaac_ros_cumotion_interfaces/lib/python3.12/site-packages",
+    "/home/kaipis/Desktop/projects/robotics/zero_shot_robot_ws/install/custom_msgs/lib/python3.12/site-packages",
+    "/opt/ros/jazzy/lib/python/site-packages",
+    "/opt/ros/jazzy/lib/python3.12/site-packages"
+  ]
 }

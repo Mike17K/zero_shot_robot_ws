@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>navigator_cli</name>
+  <version>3.0.0</version>
+  <description>Interactive pose-graph navigator for the group_a GP70L: teach poses, connect them, move along shortest paths with cuMotion</description>
+  <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
+  <author>Laboratory for Manufacturing Systems and Automation (LMS) - University of Patras</author>
+  <license>BSD-2-Clause</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>shared_utils</exec_depend>
+  <exec_depend>python3-pydantic</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

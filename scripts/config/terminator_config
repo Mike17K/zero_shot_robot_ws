@@ -34,7 +34,7 @@
       type = Terminal
       parent = split_vert_left
       order = 0
-      title = Camera Input & Params
+      title = Workcell (Gazebo)
     [[[split_vert_left_2]]]
       type = VPaned
       parent = split_vert_left
@@ -43,7 +43,7 @@
       type = Terminal
       parent = split_vert_left_2
       order = 0
-      title = Camera Understortion
+      title = nvblox
     [[[split_vert_left_3]]]
       type = VPaned
       parent = split_vert_left_2
@@ -52,18 +52,18 @@
       type = Terminal
       parent = split_vert_left_3
       order = 0
-      title = Scratch 1
+      title = Navigator CLI
     [[[terminal3]]]
       type = Terminal
       parent = split_vert_left_3
       order = 1
-      title = Scratch 2
+      title = cuMotion test
     # Right column, top to bottom: terminal4 / terminal5 / terminal6 / terminal7
     [[[terminal4]]]
       type = Terminal
       parent = split_vert_right
       order = 0
-      title = Depth Logic
+      title = cuMotion planner
     [[[split_vert_right_2]]]
       type = VPaned
       parent = split_vert_right
@@ -72,7 +72,7 @@
       type = Terminal
       parent = split_vert_right_2
       order = 0
-      title = System Logs
+      title = RViz
     [[[split_vert_right_3]]]
       type = VPaned
       parent = split_vert_right_2
@@ -86,5 +86,5 @@
       type = Terminal
       parent = split_vert_right_3
       order = 1
-      title = Scratch 3
+      title = Scratch
 [plugins]
