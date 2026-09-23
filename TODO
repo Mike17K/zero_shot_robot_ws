@@ -1,2 +1,40 @@
+# TODO
 
+## 1. Gripper reach
+- [x] Shrink the suction reach: the distance from the cup tips (gripper_tcp)
+      to the object surface at which suction grabs - gripper_manager's
+      suction_reach (group_a_bringup/launch/bringup.launch.py arg): 0.06 -> 0.01 m
 
+## 2. workcell_demo package
+- [x] New package src/workcell/workcell_demo: the main orchestrator for the
+      system's later high-level functionality (state machine node + launch)
+
+## 3. Navigator action servers
+- [x] Action interfaces in custom_msgs: NavigateToNode (graph path to a node
+      id/label), CartesianMove (straight-line tool offset); gripper: existing
+      gripper/set_suction + new latched gripper/state (GripperState)
+- [x] navigator_cli: ROS 2 node serving them (same graph / robot manager as the
+      CLI), so the demo and other scripts can call navigation over messages
+- [x] shared_utils: NavigatorClient wrapping those interfaces for easy access
+      from any script
+
+## 4. Navigator CLI gripper command
+- [x] `g on|off` / `gripper on|off` command in navigator_cli
+
+## 5. Demo pick & place cycle (workcell_demo)
+When a box is at the beam, the robot is idle and holding nothing:
+- [x] navigate to node 6
+- [x] cartesian move 10 cm down
+- [x] gripper on
+- [x] cartesian move 10 cm up
+- [x] navigate to one of the place nodes 2 / 3 / 4
+- [x] gripper off
+- [x] navigate back to node 5 (idle), wait for the next box
+
+## Follow-ups
+- [ ] Pick height: with a 1 cm suction reach, a fixed 10 cm descent from node 6
+      (tool at z=0.66, belt top 0.40) only reaches boxes ~0.15-0.17 m tall -
+      boxes are 0.08-0.25 m. Descend by the waiting box's height instead
+      (factory publishes sizes on /box_factory/spawned), or a guarded
+      move-until-contact.
+- [ ] Try the full cycle live in Gazebo (only tested against fakes so far).

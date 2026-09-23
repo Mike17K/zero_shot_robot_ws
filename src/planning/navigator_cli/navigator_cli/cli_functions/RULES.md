@@ -1,0 +1,11 @@
+- Each CLI command is implemented as a class in `navigator_cli/cli_functions/` (`example.py` is the template).
+- Every command class inherits from `CLIFunctionBase`.
+- Each class defines a static `name` attribute used as the command token.
+- `accept_kwargs` may be overridden to control whether keyword-style arguments are supported.
+- The constructor (`__init__`) receives at least `node: Node` and can set up ROS publishers/subscribers or dependencies.
+- Each class implements `@staticmethod __str__()` to return a short usage/help string.
+- Each class implements `execute(self, args: List[str] = None, kwargs: Dict[str, Any] = None)` as the entry point for command execution.
+- `args` is used for positional CLI arguments; `kwargs` is used only if `accept_kwargs` is True.
+- New modules must be exported in `cli_functions/__init__.py` and added to the `cli_functions` list in `main.py` to be available to the dispatcher.
+- Kwargs are written `-flag` (-> True) or `-key=value`.
+- Names should be short and stable; command logic should remain isolated inside the class.

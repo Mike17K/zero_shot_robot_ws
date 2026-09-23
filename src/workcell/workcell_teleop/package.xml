@@ -10,6 +10,9 @@
   <depend>rclpy</depend>
   <depend>trajectory_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>rosgraph_msgs</depend>
+  <depend>custom_msgs</depend>
   <depend>std_srvs</depend>
   <depend>builtin_interfaces</depend>
   <depend>ament_index_python</depend>

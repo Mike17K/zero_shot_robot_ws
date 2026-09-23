@@ -29,6 +29,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'infeed_line_controller = workcell_bringup.infeed_line_controller:main',
         ],
     },
 )

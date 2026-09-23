@@ -1,0 +1,14 @@
+# Move the robot to a pose-graph node (navigator_cli's navigator_server,
+# /<robot>/navigator/navigate_to_node).
+string target        # node id ("6") or label ("InspectionPoint")
+bool direct          # true: one joint move straight to the node, ignoring the graph
+float64 speed        # cuMotion time dilation (0, 1]; 0 = the server default
+---
+bool success
+string message
+int32 reached_node   # id of the node reached, -1 on failure
+---
+int32 segment        # 0 = moving onto the graph, then 1..segments
+int32 segments
+int32 next_node      # node the current segment moves to
+string status

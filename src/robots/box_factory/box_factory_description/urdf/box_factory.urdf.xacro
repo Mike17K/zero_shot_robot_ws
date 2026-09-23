@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<robot name="box_factory" xmlns:xacro="http://ros.org/xacro">
+
+  <!-- 1. Launch-injected arguments. xyz/rpy place the OUTLET (the spawn
+       point, on the conveying surface) - see box_factory_bringup's
+       bringup.launch.py, which derives them from workcell_bringup/layout.py. -->
+  <xacro:arg name="parent" default="world" />
+  <xacro:arg name="xyz" default="0 0 0" />
+  <xacro:arg name="rpy" default="0 0 0" />
+  <xacro:arg name="chute_width" default="0.46" />
+  <xacro:arg name="chute_depth" default="0.50" />
+  <xacro:arg name="chute_height" default="0.30" />
+  <xacro:arg name="clearance" default="0.45" />
+  <xacro:arg name="namespace" default="" />
+
+  <xacro:include filename="$(find box_factory_description)/urdf/box_factory_macro.xacro" />
+
+  <!-- 2. "world" root link only when parented to it (same pattern as
+       group_a_description / conveyor_description). -->
+  <xacro:if value="${'$(arg parent)' == 'world'}">
+    <link name="world" />
+  </xacro:if>
+
+  <!-- 3. Instantiate. Bare frame names - instances are told apart by their
+       namespace (own /<namespace>/tf), like the robot and the conveyors. -->
+  <xacro:box_factory
+    parent="$(arg parent)"
+    chute_width="$(arg chute_width)"
+    chute_depth="$(arg chute_depth)"
+    chute_height="$(arg chute_height)"
+    clearance="$(arg clearance)"
+  >
+    <origin xyz="$(arg xyz)" rpy="$(arg rpy)" />
+  </xacro:box_factory>
+
+</robot>

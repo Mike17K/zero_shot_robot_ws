@@ -23,6 +23,7 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args.append(DeclareLaunchArgument("side_rail_height", default_value="0.03", description="Side guide-rail height ABOVE the conveying surface, meters - keep low on pallet belts (so the robot can still lift a pallet off from above), tall on a loose-item infeed belt (so items don't fall off the sides)"))
     args.append(DeclareLaunchArgument("belt_speed", default_value="6.0", description="Target roller angular velocity, rad/s (bootstrap-published once the belt controller is active)"))
     args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for this belt's nodes and topics, including its own /<namespace>/tf"))
+    args.append(DeclareLaunchArgument("speed_topic", default_value="target_speed", description="Topic (under the namespace) belt_speed_relay takes std_msgs/Float64 speed commands from - set it to something else (e.g. line_speed) when a controller sits between speed requests and the belt"))
     # workcell.launch.py starts every conveyor (and the robot) together, and
     # each instance's own controller spawner used to fire at the same fixed
     # 4.0s delay - meaning all of them called switch_controller on their
@@ -237,6 +238,7 @@ def launch_setup(context):
             {"num_rollers": num_rollers, "initial_speed": float(belt_speed)},
             sim_time_param,
         ],
+        remappings=[("target_speed", LaunchConfiguration("speed_topic").perform(context))],
     )
 
     return [

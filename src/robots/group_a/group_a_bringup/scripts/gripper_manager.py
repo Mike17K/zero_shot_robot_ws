@@ -50,7 +50,10 @@ No bridge entries and no subprocesses are involved.
 ROS interface (namespaced per robot):
   gripper/set_suction (std_srvs/srv/SetBool)     - suction on/off
   gripper/spawn_box   (custom_msgs/srv/SpawnBox) - spawn one dynamic box
+  gripper/state       (custom_msgs/msg/GripperState, latched) - suction on/off, held objects
+  spawned_box_topics  (custom_msgs/msg/SpawnedBox) - sizes of boxes spawned elsewhere
 """
+import math
 import threading
 
 import rclpy
@@ -67,6 +70,8 @@ from gz.msgs10.entity_pb2 import Entity
 from gz.msgs10.entity_plugin_v_pb2 import EntityPlugin_V
 from gz.msgs10.pose_v_pb2 import Pose_V
 
+from custom_msgs.msg import GripperState, SpawnedBox
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from custom_msgs.srv import SpawnBox
 
 BOX_DENSITY_KG_M3 = 300.0  # cardboard-ish, for a plausible mass from size alone
@@ -90,7 +95,7 @@ _BOX_SDF_TEMPLATE = """<?xml version="1.0"?>
         <geometry><box><size>{w} {d} {h}</size></box></geometry>
         <material>
           <ambient>{r} {g} {b} 1</ambient>
-          <diffuse>{r} {g} {b} 1</diffuse>
+          <diffuse>{r} {g} {b} 1</diffuse>{pbr}
         </material>
       </visual>
       <collision name="collision">
@@ -102,17 +107,26 @@ _BOX_SDF_TEMPLATE = """<?xml version="1.0"?>
 """
 
 
-def _box_sdf(model_name: str, link_name: str, w: float, d: float, h: float) -> str:
+_PBR_TEMPLATE = """
+          <pbr><metal>
+            <albedo_map>{albedo_map}</albedo_map>
+            <roughness>0.9</roughness><metalness>0.0</metalness>
+          </metal></pbr>"""
+
+
+def _box_sdf(model_name: str, link_name: str, w: float, d: float, h: float,
+             rgb=BOX_COLOR_RGB, albedo_map: str = '') -> str:
     # Pose is NOT in the SDF: EntityFactory.pose places the model instead.
     mass = max(BOX_MIN_MASS_KG, BOX_DENSITY_KG_M3 * w * d * h)
-    r, g, b = BOX_COLOR_RGB
+    r, g, b = rgb
+    pbr = _PBR_TEMPLATE.format(albedo_map=albedo_map) if albedo_map else ''
     return _BOX_SDF_TEMPLATE.format(
         model_name=model_name, link_name=link_name,
         w=w, d=d, h=h, mass=mass,
         ixx=mass * (d * d + h * h) / 12.0,
         iyy=mass * (w * w + h * h) / 12.0,
         izz=mass * (w * w + d * d) / 12.0,
-        r=r, g=g, b=b,
+        r=r, g=g, b=b, pbr=pbr,
     )
 
 
@@ -146,7 +160,7 @@ class GripperManager(Node):
         self.declare_parameter('world_frame', 'world')
         self.declare_parameter('suction_half_width', 0.17)
         self.declare_parameter('suction_half_length', 0.22)
-        self.declare_parameter('suction_reach', 0.06)
+        self.declare_parameter('suction_reach', 0.01)
         self.declare_parameter('suction_back_tol', 0.02)
         # Used for objects this node did not spawn (size unknown). The zone test
         # is on the object's CENTER, so 0 would make any real box ungraspable.
@@ -154,6 +168,10 @@ class GripperManager(Node):
         self.declare_parameter('graspable_prefixes', ['box'])
         self.declare_parameter('spawn_link_name', 'link')
         self.declare_parameter('update_rate_hz', 30.0)
+        # Boxes spawned by other nodes (box_factory_bringup) are announced
+        # here with their size, so the suction zone test uses their real
+        # height instead of unknown_object_half_height.
+        self.declare_parameter('spawned_box_topics', ['/box_factory/spawned'])
 
         self.world_name = self.get_parameter('world_name').value
         self.robot_model_name = (self.get_parameter('robot_model_name').value
@@ -206,7 +224,12 @@ class GripperManager(Node):
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self.create_service(SetBool, 'gripper/set_suction', self._on_set_suction)
+        self._state_pub = self.create_publisher(
+            GripperState, 'gripper/state', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self._publish_state()
         self.create_service(SpawnBox, 'gripper/spawn_box', self._on_spawn_box)
+        for topic in self.get_parameter('spawned_box_topics').value:
+            self.create_subscription(SpawnedBox, topic, self._on_spawned_box, 50)
         self._timer = self.create_timer(1.0 / max(1.0, update_rate), self._on_timer)
 
         self.get_logger().info(
@@ -214,6 +237,9 @@ class GripperManager(Node):
             f'parent_link={self.parent_link!r} footprint='
             f'{2 * self.half_width:.2f}x{2 * self.half_length:.2f}m reach={self.reach:.2f}m '
             f'prefixes={list(self.graspable_prefixes)}')
+
+    def _on_spawned_box(self, msg: SpawnedBox) -> None:
+        self._object_half_height[msg.name] = msg.size.z / 2.0
 
     # ── Object tracking (gz-transport thread) ──────────────────────────────
 
@@ -297,7 +323,11 @@ class GripperManager(Node):
             return False
         self._grasped.add(model_name)
         self.get_logger().info(f'grasped {model_name}')
+        self._publish_state()
         return True
+
+    def _publish_state(self) -> None:
+        self._state_pub.publish(GripperState(suction_on=self._suction_on, grasped=sorted(self._grasped)))
 
     def _release_all(self) -> int:
         count = len(self._grasped)
@@ -305,6 +335,7 @@ class GripperManager(Node):
             self._detach_pub.publish(GzEmpty())  # every instance listens here
             self.get_logger().info(f'released {count} object(s)')
         self._grasped.clear()
+        self._publish_state()
         # A fresh suction cycle retries objects whose install failed before.
         self._install_failed.clear()
         return count
@@ -337,6 +368,7 @@ class GripperManager(Node):
 
     def _on_set_suction(self, request, response):
         self._suction_on = bool(request.data)
+        self._publish_state()
         if self._suction_on:
             response.success = True
             response.message = 'suction ON - capturing objects in the gripper footprint'
@@ -359,16 +391,24 @@ class GripperManager(Node):
                 return name
 
     def _on_spawn_box(self, request, response):
+        if request.rgb and len(request.rgb) != 3:
+            response.success = False
+            response.message = f'rgb must be empty or have 3 values, got {len(request.rgb)}'
+            return response
+        rgb = (tuple(min(1.0, max(0.0, c)) for c in request.rgb)
+               if request.rgb else BOX_COLOR_RGB)
         model_name = self._next_box_name()
         req = EntityFactory()
         req.sdf = _box_sdf(model_name, self.spawn_link_name,
-                           request.width, request.depth, request.height)
+                           request.width, request.depth, request.height,
+                           rgb=rgb, albedo_map=request.albedo_map)
         req.name = model_name
         req.allow_renaming = False
         req.pose.position.x = request.x
         req.pose.position.y = request.y
         req.pose.position.z = request.z
-        req.pose.orientation.w = 1.0
+        req.pose.orientation.z = math.sin(request.yaw / 2.0)
+        req.pose.orientation.w = math.cos(request.yaw / 2.0)
 
         ok, rep = self._gz.request(self._svc_create, req, EntityFactory, Boolean,
                                    GZ_SERVICE_TIMEOUT_MS)
@@ -382,7 +422,8 @@ class GripperManager(Node):
         response.success = True
         response.message = (
             f'spawned {model_name} ({request.width:.2f}x{request.depth:.2f}x'
-            f'{request.height:.2f}m) at ({request.x:.2f}, {request.y:.2f}, {request.z:.2f})')
+            f'{request.height:.2f}m) at ({request.x:.2f}, {request.y:.2f}, {request.z:.2f}) '
+            f'yaw={math.degrees(request.yaw):.0f}deg')
         return response
 
     def destroy_node(self):
