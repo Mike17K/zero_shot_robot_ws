@@ -50,7 +50,7 @@ No bridge entries and no subprocesses are involved.
 ROS interface (namespaced per robot):
   gripper/set_suction (std_srvs/srv/SetBool)     - suction on/off
   gripper/spawn_box   (custom_msgs/srv/SpawnBox) - spawn one dynamic box
-                                                  (also used by conveyor_bringup's box_factory)
+  spawned_box_topics  (custom_msgs/msg/SpawnedBox) - sizes of boxes spawned elsewhere
 """
 import math
 import threading
@@ -69,6 +69,7 @@ from gz.msgs10.entity_pb2 import Entity
 from gz.msgs10.entity_plugin_v_pb2 import EntityPlugin_V
 from gz.msgs10.pose_v_pb2 import Pose_V
 
+from custom_msgs.msg import SpawnedBox
 from custom_msgs.srv import SpawnBox
 
 BOX_DENSITY_KG_M3 = 300.0  # cardboard-ish, for a plausible mass from size alone
@@ -165,6 +166,10 @@ class GripperManager(Node):
         self.declare_parameter('graspable_prefixes', ['box'])
         self.declare_parameter('spawn_link_name', 'link')
         self.declare_parameter('update_rate_hz', 30.0)
+        # Boxes spawned by other nodes (box_factory_bringup) are announced
+        # here with their size, so the suction zone test uses their real
+        # height instead of unknown_object_half_height.
+        self.declare_parameter('spawned_box_topics', ['/box_factory/spawned'])
 
         self.world_name = self.get_parameter('world_name').value
         self.robot_model_name = (self.get_parameter('robot_model_name').value
@@ -218,6 +223,8 @@ class GripperManager(Node):
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self.create_service(SetBool, 'gripper/set_suction', self._on_set_suction)
         self.create_service(SpawnBox, 'gripper/spawn_box', self._on_spawn_box)
+        for topic in self.get_parameter('spawned_box_topics').value:
+            self.create_subscription(SpawnedBox, topic, self._on_spawned_box, 50)
         self._timer = self.create_timer(1.0 / max(1.0, update_rate), self._on_timer)
 
         self.get_logger().info(
@@ -225,6 +232,9 @@ class GripperManager(Node):
             f'parent_link={self.parent_link!r} footprint='
             f'{2 * self.half_width:.2f}x{2 * self.half_length:.2f}m reach={self.reach:.2f}m '
             f'prefixes={list(self.graspable_prefixes)}')
+
+    def _on_spawned_box(self, msg: SpawnedBox) -> None:
+        self._object_half_height[msg.name] = msg.size.z / 2.0
 
     # ── Object tracking (gz-transport thread) ──────────────────────────────
 

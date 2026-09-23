@@ -1,4 +1,3 @@
-import math
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -145,6 +144,7 @@ def generate_launch_description():
                             "roller_gap": conveyor.get("roller_gap", "0.005"),
                             "side_rail_height": conveyor.get("side_rail_height", "0.03"),
                             "controllers_spawn_delay": conveyor.get("controllers_spawn_delay", "4.0"),
+                            "speed_topic": conveyor.get("speed_topic", "target_speed"),
                             "sim_gazebo": LaunchConfiguration("sim_gazebo"),
                             "use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
                             "namespace": conveyor["name"],
@@ -154,33 +154,33 @@ def generate_launch_description():
             )
         )
 
-    # 9b. Random box factory on package_infeed (see conveyor_bringup/scripts/
-    # box_factory.py) - starts disabled, switched on from workcell_teleop's
-    # Box Factory panel. The spawn area is derived from the infeed entry
-    # above: its center line, 0.3m in from the far end (the end away from the
-    # robot, +local X after its 90deg yaw - same point as teleop's Spawn Box
-    # default), on top of its conveying surface.
-    infeed = next(c for c in conveyors_config if c["name"] == "conveyor_package_infeed")
-    infeed_x, infeed_y, _ = (float(v) for v in infeed["xyz"].split())
-    infeed_yaw = float(infeed["rpy"].split()[2])
-    infeed_far = float(infeed["length"]) / 2.0 - 0.3
-    box_factory = Node(
-        package="conveyor_bringup",
-        executable="box_factory.py",
-        name="box_factory",
-        output="screen",
-        parameters=[{
-            "world_name": "default",
-            "spawn_service": f"/{robots_config[0]['name']}/gripper/spawn_box",
-            "spawn_x": infeed_x + infeed_far * math.cos(infeed_yaw),
-            "spawn_y": infeed_y + infeed_far * math.sin(infeed_yaw),
-            "lane_yaw": infeed_yaw,
-            "lane_width": float(infeed["width"]),
-            "belt_top_z": float(infeed["height"]),
-        }],
-        condition=IfCondition(LaunchConfiguration("sim_gazebo")),
-    )
-    all_stacks.append(box_factory)
+    # 9b. Box factories - each its own "robot" (box_factory_description /
+    # box_factory_bringup): a dispenser chute over its belt's spawn point, and
+    # the factory node that spawns random boxes there (starts disabled - the
+    # teleop Box Factory panel switches it on). Placement in layout.py.
+    factory_launch_path = os.path.join(
+        get_package_share_directory("box_factory_bringup"), "launch", "bringup.launch.py")
+    for factory in layout.FACTORIES:
+        belt = layout.conveyor(factory["conveyor"])
+        _, _, belt_top, belt_yaw = layout.belt_frame(belt)
+        ox, oy = layout.belt_point(belt, float(belt["length"]) / 2.0 - factory["from_far_end"])
+        all_stacks.append(
+            GroupAction(
+                actions=[
+                    IncludeLaunchDescription(
+                        PythonLaunchDescriptionSource(factory_launch_path),
+                        launch_arguments={
+                            "namespace": factory["name"],
+                            "xyz": f"{ox:.4f} {oy:.4f} {belt_top:.4f}",
+                            "rpy": f"0.0 0.0 {belt_yaw:.4f}",
+                            "lane_width": belt["width"],
+                            "sim_gazebo": LaunchConfiguration("sim_gazebo"),
+                        }.items(),
+                    ),
+                ],
+                condition=IfCondition(LaunchConfiguration("sim_gazebo")),
+            )
+        )
 
     # 10. Spawn everything together, in parallel. Previously this staggered
     # every entity by a growing i*0.5s (0, 0.5, 1.0, ...) specifically to

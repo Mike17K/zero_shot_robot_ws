@@ -92,23 +92,23 @@
       "all_ee_poses": {
         "manipulator": {
           "pos": {
-            "x": -1.0192383267276006,
-            "y": 1.638429873708652,
-            "z": 1.292452669498172
+            "x": -0.9575443770233389,
+            "y": 1.260804962733102,
+            "z": 1.0623920323976859
           },
           "rot": {
-            "x": -0.03320133832688277,
-            "y": 0.9992615627961932,
-            "z": 0.0025952392237195195,
-            "w": -0.0191641588593177
+            "x": -0.7070066993561254,
+            "y": 0.707097794727224,
+            "z": -0.007979816140046074,
+            "w": -0.009516212052334803
           },
           "joints": [
-            2.123716868,
-            0.40474187200034634,
-            -0.19163704600053552,
-            -0.037699109999981044,
-            -0.9512046320000628,
-            1.1058405599999959
+            2.2179646579999988,
+            0.25507991200029434,
+            -0.6099923650003489,
+            -0.025132739999977373,
+            -0.7243117839999871,
+            2.5132739999999942
           ]
         }
       },
@@ -147,21 +147,6 @@
   ],
   "edges": [
     {
-      "source_id": 6,
-      "target_id": 2,
-      "move_group_for_transition": "manipulator"
-    },
-    {
-      "source_id": 6,
-      "target_id": 3,
-      "move_group_for_transition": "manipulator"
-    },
-    {
-      "source_id": 6,
-      "target_id": 4,
-      "move_group_for_transition": "manipulator"
-    },
-    {
       "source_id": 2,
       "target_id": 5,
       "move_group_for_transition": "manipulator"
@@ -174,6 +159,21 @@
     {
       "source_id": 4,
       "target_id": 5,
+      "move_group_for_transition": "manipulator"
+    },
+    {
+      "source_id": 5,
+      "target_id": 2,
+      "move_group_for_transition": "manipulator"
+    },
+    {
+      "source_id": 5,
+      "target_id": 3,
+      "move_group_for_transition": "manipulator"
+    },
+    {
+      "source_id": 5,
+      "target_id": 4,
       "move_group_for_transition": "manipulator"
     },
     {

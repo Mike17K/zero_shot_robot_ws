@@ -4,7 +4,7 @@
 # pane first has to `bash scripts/shell.sh` into the container.
 #
 # Commands are pasted but NOT run - press Enter in each pane, top to bottom
-# in this order: Workcell, cuMotion, RViz, Teleop, then Navigator once the
+# in this order: Workcell, Infeed line, cuMotion, RViz, Teleop, then Navigator once the
 # robot is up (it needs /robot_1/joint_states, TF and cumotion/motion_plan).
 
 ROS_DOMAIN_ID=40  # matches the container root .bashrc (setup_workspace.sh)
@@ -25,7 +25,7 @@ GLOBAL_CMD="cd $CONTAINER_WS && source /opt/ros/$ROS_DISTRO/setup.bash && source
 #   terminal0  Workcell      | terminal4  cuMotion planner
 #   terminal1  nvblox        | terminal5  RViz
 #   terminal2  Navigator CLI | terminal6  Teleop UI
-#   terminal3  cuMotion test | terminal7  Scratch
+#   terminal3  cuMotion test | terminal7  Infeed line
 # Terminator's Alt+arrow jumps to the geometrically nearest pane, which is
 # ambiguous across the unevenly split columns - so every step first
 # saturates to the top-left corner (extra moves past an edge are no-ops),
@@ -82,4 +82,10 @@ launch_panels() {
     # see src/workcell/workcell_teleop.
     goto_pane 1 2
     paste_cmd 'ros2 launch workcell_teleop teleop.launch.py'
+
+    # Feeding line: laser beam in front of the robot + controller that stops
+    # the infeed belt while a box waits (start after the workcell is up - it
+    # spawns the beam sensor into Gazebo). Status/controls: teleop Infeed Line.
+    goto_pane 1 3
+    paste_cmd 'ros2 launch workcell_bringup infeed_line.launch.py'
 }

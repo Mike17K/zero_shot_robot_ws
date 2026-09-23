@@ -32,15 +32,22 @@ state rather than a one-shot grab - ON keeps capturing whatever enters the
 gripper's footprint, OFF releases everything - and the number of spawnable /
 graspable objects is unbounded. See gripper_manager.py's own docstring.
 
+Infeed Line: status and controls of workcell_bringup's infeed_line_controller
+(laser beam in front of the robot stops the feeding belt while a box waits to
+be picked). Mode, beam and speeds refresh live from its latched line/state;
+the buttons call line/set_enabled and line/release (restart ignoring the box).
+
 Box Factory: another thin client. The panel only sets ROS parameters on
-conveyor_bringup's box_factory node (enabled, period_sec, time_randomness,
-shape_randomness, size_min, size_max - see box_factory.py's docstring), which
+box_factory_bringup's factory node (/box_factory/factory) and shows its live
+/box_factory/status (enabled, period_sec, time_randomness,
+shape_randomness, size_min, size_max - see box_factory_node.py's docstring), which
 does all the random sampling and spawning itself, so the stream keeps running
 even if this UI is closed. Every change pushes the whole panel state.
 """
 import math
 import os
 import sys
+import time
 from typing import Optional
 
 import rclpy
@@ -51,11 +58,13 @@ from PyQt5 import QtCore, QtWidgets
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+from custom_msgs.msg import BoxFactoryStatus, InfeedLineState
 from custom_msgs.srv import SpawnBox
 
 MOVE_TIME_SEC = 0.3  # time_from_start for each jogged trajectory point
@@ -107,7 +116,11 @@ class TeleopNode(Node):
         self.declare_parameter('spawn_x', DEFAULT_SPAWN_X)
         self.declare_parameter('spawn_y', DEFAULT_SPAWN_Y)
         self.declare_parameter('spawn_z', DEFAULT_SPAWN_Z)
-        self.declare_parameter('box_factory_node', '/box_factory')
+        # box_factory_bringup instance: its node is <namespace>/factory.
+        self.declare_parameter('box_factory_namespace', 'box_factory')
+        # Feeding line (workcell_bringup/launch/infeed_line.launch.py) - its
+        # controller runs in this belt's namespace.
+        self.declare_parameter('infeed_line_namespace', 'conveyor_package_infeed')
 
         self.robot_namespaces: list[str] = list(self.get_parameter('robot_namespaces').value)
         self.robot_joint_names: list[str] = list(self.get_parameter('robot_joint_names').value)
@@ -118,7 +131,13 @@ class TeleopNode(Node):
         self.spawn_y: float = float(self.get_parameter('spawn_y').value)
         self.spawn_z: float = float(self.get_parameter('spawn_z').value)
 
-        self._factory_params = AsyncParameterClient(self, self.get_parameter('box_factory_node').value)
+        factory_ns = self.get_parameter('box_factory_namespace').value
+        self._factory_params = AsyncParameterClient(self, f'/{factory_ns}/factory')
+        self.factory_status: Optional[BoxFactoryStatus] = None
+        self.factory_status_stamp = 0.0
+        self.create_subscription(
+            BoxFactoryStatus, f'/{factory_ns}/status', self._on_factory_status,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
         self.joint_limits = _load_joint_limits(joint_limits_package, self.robot_joint_names)
 
@@ -149,6 +168,46 @@ class TeleopNode(Node):
             self.create_subscription(
                 JointState, f'/{ns}/joint_states',
                 lambda msg, ns=ns: self._joint_states.__setitem__(ns, msg), 1)
+
+        line_ns = self.get_parameter('infeed_line_namespace').value
+        self.infeed_line_namespace = line_ns
+        self.line_state: Optional[InfeedLineState] = None
+        self.line_state_stamp = 0.0  # wall time.monotonic() of the last state
+        self.create_subscription(
+            InfeedLineState, f'/{line_ns}/line/state', self._on_line_state,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self._line_enable_client = self.create_client(SetBool, f'/{line_ns}/line/set_enabled')
+        self._line_release_client = self.create_client(Trigger, f'/{line_ns}/line/release')
+
+    def _on_factory_status(self, msg: BoxFactoryStatus) -> None:
+        self.factory_status = msg
+        self.factory_status_stamp = time.monotonic()
+
+    def _on_line_state(self, msg: InfeedLineState) -> None:
+        self.line_state = msg
+        self.line_state_stamp = time.monotonic()
+
+    def _call_async(self, client, request, on_done) -> None:
+        """Non-blocking service call; on_done(ok, message) runs from the ROS
+        spin in the Qt thread."""
+        if not client.service_is_ready():
+            on_done(False, f'{client.srv_name} unavailable (infeed_line.launch.py not running?)')
+            return
+
+        def _done(fut):
+            result = fut.result()
+            if result is None:
+                on_done(False, f'{client.srv_name} failed: {fut.exception()}')
+            else:
+                on_done(bool(result.success), str(result.message))
+
+        client.call_async(request).add_done_callback(_done)
+
+    def set_line_enabled(self, enabled: bool, on_done) -> None:
+        self._call_async(self._line_enable_client, SetBool.Request(data=bool(enabled)), on_done)
+
+    def release_line(self, on_done) -> None:
+        self._call_async(self._line_release_client, Trigger.Request(), on_done)
 
     def current_joint_positions(self, robot_ns: str) -> Optional[list[float]]:
         """The robot's actual joint positions in robot_joint_names order, or
@@ -497,7 +556,7 @@ class SpawnPanel(QtWidgets.QGroupBox):
 
 class FactoryPanel(QtWidgets.QGroupBox):
     """Controls for box_factory (see the module docstring). Defaults mirror
-    box_factory.py's own parameter defaults - the node itself starts
+    box_factory_bringup/config/box_factory.yaml - the node itself starts
     disabled, so nothing runs until the checkbox is ticked."""
     _SIZE_LIMITS = (0.05, 0.40)  # same range as the Spawn Box panel
 
@@ -540,8 +599,12 @@ class FactoryPanel(QtWidgets.QGroupBox):
 
         self.status_label = QtWidgets.QLabel('')
         self.status_label.setWordWrap(True)
+        # Live state from the factory node's latched status topic.
+        self.live_label = QtWidgets.QLabel('')
+        self.live_label.setWordWrap(True)
 
         layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.live_label)
         layout.addLayout(form)
         layout.addLayout(sizes)
         layout.addWidget(self.status_label)
@@ -595,12 +658,139 @@ class FactoryPanel(QtWidgets.QGroupBox):
     def _push(self, *_args) -> None:
         self.on_configure(self.config(), self._on_result)
 
+    def refresh(self, status: Optional[BoxFactoryStatus]) -> None:
+        if status is None:
+            self.live_label.setText('<b>Factory: not running</b> (started by workcell.launch.py)')
+            return
+        if not status.enabled:
+            state, color = 'OFF', '#616161'
+        elif status.paused_by_line:
+            state, color = 'PAUSED - feeding line stopped', '#c62828'
+        elif status.spawn_area_blocked:
+            state, color = 'WAITING - spawn area occupied', '#ef6c00'
+        else:
+            nxt = f', next box in {status.next_spawn_in:.1f}s' if status.next_spawn_in >= 0 else ''
+            state, color = f'SPAWNING{nxt}', '#2e7d32'
+        extra = '' if status.gazebo_ok else ' | Gazebo create service not answering'
+        last = f' (last: {status.last_box})' if status.last_box else ''
+        self.live_label.setText(f'<b><span style="color:{color}">{state}</span></b> - '
+                                f'{status.boxes_spawned} boxes spawned{last}{extra}')
+        # Keep the checkbox in sync if someone else toggled `enabled`.
+        if self.enabled_check.isChecked() != status.enabled:
+            self.enabled_check.blockSignals(True)
+            self.enabled_check.setChecked(status.enabled)
+            self.enabled_check.blockSignals(False)
+
     def _on_result(self, ok: bool, message: str) -> None:
         self.status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
         if not ok and self.enabled_check.isChecked():
             self.enabled_check.blockSignals(True)
             self.enabled_check.setChecked(False)
             self.enabled_check.blockSignals(False)
+
+
+class InfeedLinePanel(QtWidgets.QGroupBox):
+    """Feeding line status and controls (workcell_bringup's
+    infeed_line_controller). Refreshed from its latched line/state topic on
+    every Qt tick by TeleopMainWindow; the infeed belt's speed slider in the
+    Conveyors column sets the speed the line runs at."""
+    STALE_SEC = 3.0
+    _MODES = {
+        InfeedLineState.MODE_DISABLED: ('OFF', '#616161', 'line switched off'),
+        InfeedLineState.MODE_RUNNING: ('RUNNING', '#2e7d32', 'feeding boxes'),
+        InfeedLineState.MODE_BLOCKED: ('STOPPED - BOX AT BEAM', '#c62828',
+                                       'waiting for the robot to pick the box (or Release)'),
+        InfeedLineState.MODE_RELEASED: ('RELEASED', '#ef6c00', 'running until the box passes the beam'),
+    }
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__('Infeed Line', parent)
+        self.node = node
+
+        self.mode_label = QtWidgets.QLabel()
+        self.mode_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.detail_label = QtWidgets.QLabel()
+        self.detail_label.setWordWrap(True)
+        self.beam_label = QtWidgets.QLabel()
+        self.speed_label = QtWidgets.QLabel()
+
+        self.enable_btn = QtWidgets.QPushButton()
+        self.enable_btn.setCheckable(True)
+        self.enable_btn.clicked.connect(self._on_enable_clicked)
+        self.release_btn = QtWidgets.QPushButton('Release box (restart line)')
+        self.release_btn.setToolTip('Ignore the box at the beam: run the belt until it has passed')
+        self.release_btn.clicked.connect(self._on_release_clicked)
+
+        self.status_label = QtWidgets.QLabel('')
+        self.status_label.setWordWrap(True)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.enable_btn)
+        buttons.addWidget(self.release_btn)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.mode_label)
+        layout.addWidget(self.detail_label)
+        layout.addWidget(self.beam_label)
+        layout.addWidget(self.speed_label)
+        layout.addLayout(buttons)
+        layout.addWidget(self.status_label)
+        self.refresh()
+
+    def _state(self) -> Optional[InfeedLineState]:
+        if self.node.line_state is None or time.monotonic() - self.node.line_state_stamp > self.STALE_SEC:
+            return None
+        return self.node.line_state
+
+    def refresh(self) -> None:
+        st = self._state()
+        if st is None:
+            self._set_mode('NO CONTROLLER', '#424242')
+            self.detail_label.setText('Start it: ros2 launch workcell_bringup infeed_line.launch.py '
+                                      '(until then the infeed belt ignores its speed slider and the '
+                                      'box factory runs unconditionally)')
+            self.beam_label.setText('Beam: -')
+            self.speed_label.setText('')
+            self.enable_btn.setEnabled(False)
+            self.release_btn.setEnabled(False)
+            self._set_enable_text(False)
+            return
+        text, color, detail = self._MODES.get(st.mode, (f'mode {st.mode}', '#424242', ''))
+        self._set_mode(text, color)
+        self.detail_label.setText(detail + ' - box factory ' +
+                                  ('spawning' if st.mode in (InfeedLineState.MODE_RUNNING,
+                                                             InfeedLineState.MODE_RELEASED) else 'paused'))
+        if not st.beam_ok:
+            self.beam_label.setText('Beam: NO SCANS (sensor missing?)')
+        else:
+            rng = f'{st.beam_range:.2f} m' if math.isfinite(st.beam_range) else 'clear'
+            self.beam_label.setText(f"Beam: {'BLOCKED' if st.beam_blocked else 'clear'} ({rng}) | "
+                                    f'boxes stopped: {st.boxes_stopped}')
+        self.speed_label.setText(f'Speed: request {st.speed_request:+.2f} rad/s, '
+                                 f'belt {st.speed_command:+.2f} rad/s')
+        self.enable_btn.setEnabled(True)
+        self.release_btn.setEnabled(st.mode == InfeedLineState.MODE_BLOCKED)
+        self._set_enable_text(st.enabled)
+
+    def _set_mode(self, text: str, color: str) -> None:
+        self.mode_label.setText(text)
+        self.mode_label.setStyleSheet(
+            f'background-color: {color}; color: white; font-weight: bold; padding: 4px;')
+
+    def _set_enable_text(self, enabled: bool) -> None:
+        self.enable_btn.blockSignals(True)
+        self.enable_btn.setChecked(enabled)
+        self.enable_btn.blockSignals(False)
+        self.enable_btn.setText('Line: ON (click to stop)' if enabled else 'Line: OFF (click to start)')
+
+    def _report(self, ok: bool, message: str) -> None:
+        self.status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
+
+    def _on_enable_clicked(self, checked: bool) -> None:
+        self.node.set_line_enabled(checked, self._report)
+
+    def _on_release_clicked(self) -> None:
+        self.node.release_line(self._report)
 
 
 class TeleopMainWindow(QtWidgets.QMainWindow):
@@ -633,7 +823,10 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         scene_col = QtWidgets.QVBoxLayout()
         scene_col.addWidget(QtWidgets.QLabel('<b>Scene</b>'))
         scene_col.addWidget(SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z))
-        scene_col.addWidget(FactoryPanel(self.node.configure_factory))
+        self._line_panel = InfeedLinePanel(self.node)
+        scene_col.addWidget(self._line_panel)
+        self._factory_panel = FactoryPanel(self.node.configure_factory)
+        scene_col.addWidget(self._factory_panel)
         scene_col.addStretch(1)
 
         outer.addLayout(robots_col, 2)
@@ -651,6 +844,9 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
 
     def _on_ros_tick(self) -> None:
         rclpy.spin_once(self.node, timeout_sec=0)
+        self._line_panel.refresh()
+        fresh = time.monotonic() - self.node.factory_status_stamp < 3.0
+        self._factory_panel.refresh(self.node.factory_status if fresh else None)
         # Sliders start at 0 while the arm is wherever it is - sync them once
         # as soon as each robot's first joint state arrives.
         for panel in self._robot_panels:

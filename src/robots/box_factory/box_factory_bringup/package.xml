@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>box_factory_bringup</name>
+  <version>0.0.1</version>
+  <description>Bringup for the box factory: description + robot_state_publisher + Gazebo spawn, and the factory node that spawns random boxes onto the infeed belt</description>
+  <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>box_factory_description</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>ros_gz_sim</depend>
+  <depend>xacro</depend>
+  <exec_depend>launch_param_builder</exec_depend>
+  <!-- box_factory_node.py: gz.transport13 / gz.msgs10 Python bindings for
+       spawning and spawn-area tracking (system python, see its shebang). -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
+  <exec_depend>gz_transport_vendor</exec_depend>
+  <exec_depend>gz_msgs_vendor</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

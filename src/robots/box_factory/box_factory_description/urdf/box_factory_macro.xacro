@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <!-- Top-level (not nested) - xacro registers macros globally, so one
+         defined inside box_factory would be re-declared per instance (same
+         reason as conveyor_macro.xacro's roller macros). -->
+    <xacro:macro name="box_factory_chute_wall" params="name x y sx sy sz">
+        <visual name="${name}">
+            <origin xyz="${x} ${y} 0" rpy="0 0 0" />
+            <geometry>
+                <box size="${sx} ${sy} ${sz}" />
+            </geometry>
+            <material name="factory_yellow">
+                <color rgba="0.95 0.75 0.10 1.0" />
+            </material>
+        </visual>
+    </xacro:macro>
+
+    <!-- Box factory: for now a static dispenser - an open chute (four thin
+         walls, open top and bottom) hanging `clearance` above the conveying
+         surface, over the spot where box_factory_bringup's factory node
+         spawns boxes.
+
+         Frames (bare names, scoped by the instance namespace's own tf):
+           outlet     the spawn point ON the conveying surface; +X along the
+                      belt's travel direction, +Z up. The parent joint puts
+                      it at the launch xyz/rpy.
+           base_link  centre of the chute, `clearance` + chute_height/2 up.
+
+         Visual only - no collision, so spawned boxes and the arm never touch
+         it - and <static> in Gazebo, so it stays out of the dynamic pose
+         stream the gripper and the factory use to track boxes. -->
+    <xacro:macro name="box_factory" params="parent chute_width chute_depth chute_height clearance *origin">
+
+        <xacro:property name="wall" value="0.02" />
+        <xacro:property name="chute_z" value="${clearance + chute_height / 2.0}" />
+
+        <link name="outlet" />
+
+        <joint name="outlet_joint" type="fixed">
+            <parent link="${parent}" />
+            <child link="outlet" />
+            <xacro:insert_block name="origin" />
+        </joint>
+
+        <link name="base_link">
+            <xacro:box_factory_chute_wall name="wall_pos_x" x="${chute_width / 2.0}" y="0" sx="${wall}" sy="${chute_depth}" sz="${chute_height}" />
+            <xacro:box_factory_chute_wall name="wall_neg_x" x="${-chute_width / 2.0}" y="0" sx="${wall}" sy="${chute_depth}" sz="${chute_height}" />
+            <xacro:box_factory_chute_wall name="wall_pos_y" x="0" y="${chute_depth / 2.0}" sx="${chute_width}" sy="${wall}" sz="${chute_height}" />
+            <xacro:box_factory_chute_wall name="wall_neg_y" x="0" y="${-chute_depth / 2.0}" sx="${chute_width}" sy="${wall}" sz="${chute_height}" />
+            <inertial>
+                <mass value="1.0" />
+                <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01" />
+            </inertial>
+        </link>
+
+        <joint name="base_joint" type="fixed">
+            <parent link="outlet" />
+            <child link="base_link" />
+            <origin xyz="0 0 ${chute_z}" rpy="0 0 0" />
+        </joint>
+
+        <gazebo>
+            <static>true</static>
+        </gazebo>
+    </xacro:macro>
+</robot>

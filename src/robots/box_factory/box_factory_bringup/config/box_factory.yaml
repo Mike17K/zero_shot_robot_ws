@@ -1,0 +1,23 @@
+# box_factory_node.py parameters (see its docstring). Spawn-area geometry
+# (spawn_x/y, lane_yaw, lane_width, belt_top_z) is NOT set here - the bringup
+# launch derives it from the factory's placement (workcell_bringup/layout.py).
+/**:
+  ros__parameters:
+    world_name: "default"
+    box_prefix: "box"          # gripper_manager's graspable prefix
+    box_link_name: "link"      # gripper_manager's spawn_link_name
+    along_jitter: 0.15
+    drop_height: 0.03
+    spawn_clearance: 0.45
+    texture_pool_size: 32
+    seed: -1
+    follow_line: true
+    line_state_topic: "/conveyor_package_infeed/line/state"
+    line_state_timeout_sec: 3.0
+    # Live-tunable (teleop Box Factory panel)
+    enabled: false
+    period_sec: 3.0
+    time_randomness: 0.3
+    shape_randomness: 0.5
+    size_min: [0.10, 0.10, 0.08]
+    size_max: [0.30, 0.35, 0.25]

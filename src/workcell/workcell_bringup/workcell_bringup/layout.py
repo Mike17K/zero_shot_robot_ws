@@ -4,7 +4,7 @@ Values are strings because they are passed straight through as launch
 arguments."""
 import math
 
-# 7. Ρομπότ στην Κυψέλη Εργασίας
+# ── Robots ──
 # Single arm (Yaskawa GP70L), mounted on top of the robot_pedestal static
 # prop (see workcell_description/worlds/workcell_world.sdf and models/
 # robot_pedestal) - z=0.4 matches the pedestal's own height (shorter than
@@ -19,7 +19,8 @@ ROBOTS = [
 ]
 
 
-# 9. Conveyor fleet around the pedestal (see conveyor_description/
+# ── Conveyor belts ──
+# Conveyor fleet around the pedestal (see conveyor_description/
 # conveyor_bringup - each is its own namespaced instance, same
 # description/bringup-pair pattern as group_a and the sibling
 # internal_delivery_system_ws AGV fleet).
@@ -98,7 +99,22 @@ CONVEYORS = [
     # this layout - left exactly as manually placed, per direct
     # instruction. If you reposition pallet_mid/the pedestal later, this
     # one won't automatically stay clear of them - recheck by hand.
-    {"name": "conveyor_package_infeed", "width": "0.5", "length": "4.0", "height": "0.4", "xyz": "-1.00 1.5 0.0", "rpy": "0.0 0.0 1.5708", "side_rail_height": "0.12", "controllers_spawn_delay": "6.0"},
+    {"name": "conveyor_package_infeed", "width": "0.5", "length": "4.0", "height": "0.4", "xyz": "-1.00 1.5 0.0", "rpy": "0.0 0.0 1.5708", "side_rail_height": "0.12", "controllers_spawn_delay": "6.0",
+     # Driven through workcell_bringup's infeed_line_controller: speed
+     # requests (teleop) go to target_speed, the controller forwards them to
+     # line_speed, which is what this belt's relay listens to - so the laser
+     # beam can stop the line. See launch/infeed_line.launch.py.
+     "speed_topic": "line_speed"},
+]
+
+
+# ── Box factories ──
+# Each is its own namespaced "robot" (box_factory_bringup) feeding one belt:
+# its outlet sits on the belt's centre line, from_far_end meters in from the
+# end AWAY from the robot (the belt's +X end - boxes travel towards the
+# robot-side -X end, where infeed_line.launch.py's laser beam stops them).
+FACTORIES = [
+    {"name": "box_factory", "conveyor": "conveyor_package_infeed", "from_far_end": 0.3},
 ]
 
 

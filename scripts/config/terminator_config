@@ -86,5 +86,5 @@
       type = Terminal
       parent = split_vert_right_3
       order = 1
-      title = Scratch
+      title = Infeed line
 [plugins]
