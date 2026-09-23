@@ -12,8 +12,8 @@ from typing import Dict
 import rclpy
 from rclpy.node import Node
 
-from .cli_functions import (CLIFunctionBase, GraphEditCLIFunction, GraphNavigationCLIFunction,
-                            SuctionCLIFunction, TargetPositionCLIFunction)
+from .cli_functions import (CartesianCLIFunction, CLIFunctionBase, GraphEditCLIFunction,
+                            GraphNavigationCLIFunction, SuctionCLIFunction, TargetPositionCLIFunction)
 from .robots.interface import RobotPose
 from .robots.utils import current_robot_pose, determine_start_node
 from .robots.wrapper import RobotInterface
@@ -46,6 +46,7 @@ class InteractivePoseGraph:
             GraphEditCLIFunction(node, self.robot, self.graph),
             TargetPositionCLIFunction(node, self.robot),
             SuctionCLIFunction(node, self.robot),
+            CartesianCLIFunction(node, self.robot),
         ]
         self.cli_function_dict: Dict[str, CLIFunctionBase] = {f.name: f for f in cli_functions}
         self._print_help()
@@ -62,7 +63,7 @@ class InteractivePoseGraph:
         Logger.INFO("  s <id>   show the path to node <id> without moving")
         Logger.INFO("  t        move the tool to a typed pose (same as 'e -t')")
         Logger.INFO("  home     move to the XRDF default joint position")
-        Logger.INFO("  on/off   suction on/off")
+        Logger.INFO("  gripper on|off, g on|off, on, off   suction gripper")
         Logger.INFO("  help, exit")
 
     def cli_loop(self):
@@ -95,6 +96,8 @@ class InteractivePoseGraph:
             return self._report(self.robot.execute_joint_goal(CANONICAL_EE_GROUP, HOME_JOINTS), "home")
         if first in ('on', 'off'):
             return self.cli_function_dict[SuctionCLIFunction.name].execute(args=[first])
+        if first in ('gripper', 'g'):
+            return self.cli_function_dict[SuctionCLIFunction.name].execute(args=rest.split())
         if first == 't':
             return self.cli_function_dict[GraphNavigationCLIFunction.name].execute(args=[], kwargs={'t': True})
         if first == 's':

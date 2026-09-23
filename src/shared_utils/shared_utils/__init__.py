@@ -6,7 +6,9 @@
     bag_io            save/load JointTrajectory bags
     filters           LiveLowPass streaming filter
     ros_helpers       spin_in_background, blocking service/action calls
-    planning          CumotionClient (isaac_ros_cumotion MotionPlan / IK)
+    planning          CumotionClient (isaac_ros_cumotion MotionPlan / IK),
+                      CartesianPlanner (MoveIt compute_cartesian_path)
+    navigation        NavigatorClient (navigator_cli's navigate / cartesian actions, gripper)
     execution         TrajectoryExecutor (FollowJointTrajectory)
 
 Submodules are imported explicitly (from shared_utils.planning import

@@ -7,7 +7,10 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/CartesianMove.action"
+  "action/NavigateToNode.action"
   "msg/BoxFactoryStatus.msg"
+  "msg/GripperState.msg"
   "msg/InfeedLineState.msg"
   "msg/SpawnedBox.msg"
   "srv/SpawnBox.srv"

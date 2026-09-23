@@ -50,6 +50,7 @@ No bridge entries and no subprocesses are involved.
 ROS interface (namespaced per robot):
   gripper/set_suction (std_srvs/srv/SetBool)     - suction on/off
   gripper/spawn_box   (custom_msgs/srv/SpawnBox) - spawn one dynamic box
+  gripper/state       (custom_msgs/msg/GripperState, latched) - suction on/off, held objects
   spawned_box_topics  (custom_msgs/msg/SpawnedBox) - sizes of boxes spawned elsewhere
 """
 import math
@@ -69,7 +70,8 @@ from gz.msgs10.entity_pb2 import Entity
 from gz.msgs10.entity_plugin_v_pb2 import EntityPlugin_V
 from gz.msgs10.pose_v_pb2 import Pose_V
 
-from custom_msgs.msg import SpawnedBox
+from custom_msgs.msg import GripperState, SpawnedBox
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from custom_msgs.srv import SpawnBox
 
 BOX_DENSITY_KG_M3 = 300.0  # cardboard-ish, for a plausible mass from size alone
@@ -158,7 +160,7 @@ class GripperManager(Node):
         self.declare_parameter('world_frame', 'world')
         self.declare_parameter('suction_half_width', 0.17)
         self.declare_parameter('suction_half_length', 0.22)
-        self.declare_parameter('suction_reach', 0.06)
+        self.declare_parameter('suction_reach', 0.01)
         self.declare_parameter('suction_back_tol', 0.02)
         # Used for objects this node did not spawn (size unknown). The zone test
         # is on the object's CENTER, so 0 would make any real box ungraspable.
@@ -222,6 +224,9 @@ class GripperManager(Node):
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self.create_service(SetBool, 'gripper/set_suction', self._on_set_suction)
+        self._state_pub = self.create_publisher(
+            GripperState, 'gripper/state', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self._publish_state()
         self.create_service(SpawnBox, 'gripper/spawn_box', self._on_spawn_box)
         for topic in self.get_parameter('spawned_box_topics').value:
             self.create_subscription(SpawnedBox, topic, self._on_spawned_box, 50)
@@ -318,7 +323,11 @@ class GripperManager(Node):
             return False
         self._grasped.add(model_name)
         self.get_logger().info(f'grasped {model_name}')
+        self._publish_state()
         return True
+
+    def _publish_state(self) -> None:
+        self._state_pub.publish(GripperState(suction_on=self._suction_on, grasped=sorted(self._grasped)))
 
     def _release_all(self) -> int:
         count = len(self._grasped)
@@ -326,6 +335,7 @@ class GripperManager(Node):
             self._detach_pub.publish(GzEmpty())  # every instance listens here
             self.get_logger().info(f'released {count} object(s)')
         self._grasped.clear()
+        self._publish_state()
         # A fresh suction cycle retries objects whose install failed before.
         self._install_failed.clear()
         return count
@@ -358,6 +368,7 @@ class GripperManager(Node):
 
     def _on_set_suction(self, request, response):
         self._suction_on = bool(request.data)
+        self._publish_state()
         if self._suction_on:
             response.success = True
             response.message = 'suction ON - capturing objects in the gripper footprint'

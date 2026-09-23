@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
-"""PyQt teleop UI for the workcell: joint-position sliders per robot (sent as
-single-point JointTrajectory messages straight to
-<namespace>/gp70l_joint_trajectory_controller/joint_trajectory - the same
-topic interface MoveIt's own trajectory execution uses, just fed directly
-instead of through planning; "Refresh from robot" pulls the sliders to the
-actual joint states without moving anything, and happens once automatically
-on the first joint state), a gripper ON/OFF toggle per robot, speed
-sliders per conveyor (sent as std_msgs/Float64 on <namespace>/target_speed,
-picked up by each belt's own belt_speed_relay - see
-conveyor_bringup/scripts/belt_speed_relay.py - which fans it out to that
-belt's actual roller count), and a "Spawn Box" button with adjustable
+"""PyQt teleop UI for the workcell.
+
+Layout: a status strip on top (one coloured chip per subsystem: sim clock and
+real-time factor, robot joint states, cuMotion planner, navigator server,
+gripper, feeding line, box factory, demo), then the panels in a scroll area,
+re-flowing into 3 / 2 / 1 columns with the window width. Controls are sized
+for touch.
+
+Robot: hold-to-jog - press and hold a joint's -/+ button to move it at the
+selected speed (5-50% of its max velocity), release to stop. The joint
+trajectory controller only takes positions, so while held a target just
+ahead of the MEASURED position is streamed on
+<namespace>/gp70l_joint_trajectory_controller/joint_trajectory (see JOG_*);
+the position bars always show the measured joint states, so nothing ever
+jumps back to stale slider values. Home moves all joints to 0 at 25% speed.
+
+Also: a gripper ON/OFF toggle per robot (shows what is held), speed
+sliders per conveyor (std_msgs/Float64 on <namespace>/target_speed, fanned out
+by each belt's belt_speed_relay), and a "Spawn Box" button with adjustable
 width/depth/height and X/Y/Z position that drops a box into the scene.
 
 Robot namespaces/joint names and conveyor namespaces are ROS parameters
@@ -59,15 +67,25 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 from std_msgs.msg import Float64
 from std_srvs.srv import SetBool, Trigger
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
-from custom_msgs.msg import BoxFactoryStatus, InfeedLineState
+from custom_msgs.msg import BoxFactoryStatus, GripperState, InfeedLineState
 from custom_msgs.srv import SpawnBox
 
-MOVE_TIME_SEC = 0.3  # time_from_start for each jogged trajectory point
+MOVE_TIME_SEC = 0.3  # default time_from_start for a single-point joint command
+
+STATUS_COLORS = {
+    'ok': '#2e7d32',    # green  - running / healthy
+    'busy': '#1565c0',  # blue   - working (moving, holding, released)
+    'warn': '#ef6c00',  # orange - waiting / needs attention soon
+    'bad': '#c62828',   # red    - stopped / error / missing
+    'off': '#616161',   # grey   - switched off / not started
+}
 SERVICE_CALL_TIMEOUT_SEC = 5.0
 SERVICE_WAIT_TIMEOUT_SEC = 2.0
 # Default Spawn Box position/size seeds shown in the UI (freely editable per
@@ -86,7 +104,8 @@ DEFAULT_SPAWN_Y = 3.2
 DEFAULT_SPAWN_Z = 0.55
 
 
-def _load_joint_limits(package_name: str, joint_names: list[str]) -> dict[str, tuple[float, float]]:
+def _load_joint_limits(package_name: str, joint_names: list[str]) -> dict[str, tuple[float, float, float]]:
+    """{joint: (min_position, max_position, max_velocity)} from joint_limits.yaml."""
     path = os.path.join(get_package_share_directory(package_name), 'config', 'joint_limits.yaml')
     with open(path) as f:
         data = yaml.safe_load(f) or {}
@@ -94,7 +113,8 @@ def _load_joint_limits(package_name: str, joint_names: list[str]) -> dict[str, t
     limits = {}
     for name in joint_names:
         entry = joint_limits.get(name, {})
-        limits[name] = (float(entry.get('min_position', -math.pi)), float(entry.get('max_position', math.pi)))
+        limits[name] = (float(entry.get('min_position', -math.pi)), float(entry.get('max_position', math.pi)),
+                        float(entry.get('max_velocity', 1.0)))
     return limits
 
 
@@ -164,10 +184,25 @@ class TeleopNode(Node):
         # only the newest message matters, and spin_once drains one callback
         # per Qt tick).
         self._joint_states: dict[str, JointState] = {}
+        self.joint_state_stamp: dict[str, float] = {}
+        self.gripper_states: dict[str, GripperState] = {}
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         for ns in self.robot_namespaces:
-            self.create_subscription(
-                JointState, f'/{ns}/joint_states',
-                lambda msg, ns=ns: self._joint_states.__setitem__(ns, msg), 1)
+            self.create_subscription(JointState, f'/{ns}/joint_states',
+                                     lambda msg, ns=ns: self._on_joint_state(ns, msg), 1)
+            self.create_subscription(GripperState, f'/{ns}/gripper/state',
+                                     lambda msg, ns=ns: self.gripper_states.__setitem__(ns, msg), latched)
+
+        # Workcell status strip: sim clock (real-time factor), demo state and
+        # which servers exist (polled from the ROS graph, 1 Hz).
+        self.sim_rtf: Optional[float] = None
+        self.clock_stamp = 0.0
+        self._clock_window: list[tuple[float, float]] = []
+        self.create_subscription(Clock, '/clock', self._on_clock, 10)
+        self.demo_state: Optional[str] = None
+        self.create_subscription(String, '/workcell_demo/state',
+                                 lambda msg: setattr(self, 'demo_state', msg.data), latched)
+        self.graph_services: set[str] = set()
 
         line_ns = self.get_parameter('infeed_line_namespace').value
         self.infeed_line_namespace = line_ns
@@ -178,6 +213,28 @@ class TeleopNode(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._line_enable_client = self.create_client(SetBool, f'/{line_ns}/line/set_enabled')
         self._line_release_client = self.create_client(Trigger, f'/{line_ns}/line/release')
+
+    def _on_joint_state(self, ns: str, msg: JointState) -> None:
+        self._joint_states[ns] = msg
+        self.joint_state_stamp[ns] = time.monotonic()
+
+    def _on_clock(self, msg: Clock) -> None:
+        now = time.monotonic()
+        sim = msg.clock.sec + msg.clock.nanosec * 1e-9
+        self.clock_stamp = now
+        window = self._clock_window
+        window.append((now, sim))
+        while len(window) > 2 and now - window[0][0] > 3.0:
+            window.pop(0)
+        wall_dt = window[-1][0] - window[0][0]
+        if wall_dt > 0.5:
+            self.sim_rtf = (window[-1][1] - window[0][1]) / wall_dt
+
+    def poll_graph(self) -> None:
+        self.graph_services = {name for name, _ in self.get_service_names_and_types()}
+
+    def has_service(self, name: str) -> bool:
+        return name in self.graph_services
 
     def _on_factory_status(self, msg: BoxFactoryStatus) -> None:
         self.factory_status = msg
@@ -220,16 +277,19 @@ class TeleopNode(Node):
             return None
         return [msg.position[index[name]] for name in self.robot_joint_names]
 
-    def send_joint_positions(self, robot_ns: str, positions: list[float]) -> None:
+    def send_joint_positions(self, robot_ns: str, positions: list[float],
+                             move_time: float = MOVE_TIME_SEC) -> None:
+        """Single-point trajectory: reach `positions` in move_time seconds
+        (controller time - sim time under Gazebo). A new one replaces the old."""
         pub = self._traj_pubs.get(robot_ns)
         if pub is None:
             return
         msg = JointTrajectory()
         msg.joint_names = list(self.robot_joint_names)
         point = JointTrajectoryPoint()
-        point.positions = list(positions)
-        sec = int(MOVE_TIME_SEC)
-        point.time_from_start = Duration(sec=sec, nanosec=int((MOVE_TIME_SEC - sec) * 1e9))
+        point.positions = [float(v) for v in positions]
+        sec = int(move_time)
+        point.time_from_start = Duration(sec=sec, nanosec=int((move_time - sec) * 1e9))
         msg.points = [point]
         pub.publish(msg)
 
@@ -307,148 +367,193 @@ class TeleopNode(Node):
         future.add_done_callback(_done)
 
 
-class JointSliderRow(QtWidgets.QWidget):
-    changed = QtCore.pyqtSignal()
+# Jogging: while a -/+ button is held, a target `JOG_LOOKAHEAD_SEC` ahead of
+# the ACTUAL joint position (at the chosen speed) is re-sent every
+# JOG_PERIOD_MS - the controller only takes positions, so this is how a
+# velocity command is expressed. Built on the measured state, it cannot run
+# away or jump, and it moves at the chosen speed in controller (sim) time
+# whatever the real-time factor. Releasing the button sends a hold.
+JOG_PERIOD_MS = 50
+JOG_LOOKAHEAD_SEC = 0.25
+JOG_SPEEDS = (('5%', 0.05), ('10%', 0.10), ('25%', 0.25), ('50%', 0.50))
+HOME_SPEED_FRACTION = 0.25  # of each joint's max velocity, for the Home move
+LIMIT_MARGIN_RAD = 0.01
+
+
+class JointJogRow(QtWidgets.QWidget):
+    """-, live position bar, + for one joint. pressed(direction) / released()."""
+    pressed = QtCore.pyqtSignal(int)
+    released = QtCore.pyqtSignal()
     _STEPS = 1000
 
     def __init__(self, joint_name: str, lo: float, hi: float, parent=None):
         super().__init__(parent)
-        self.joint_name = joint_name
-        self.lo = lo
-        self.hi = hi if hi > lo else lo + 1.0
-        self._rad = min(max(0.0, self.lo), self.hi)
-
+        self.lo, self.hi = lo, (hi if hi > lo else lo + 1.0)
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        name_label = QtWidgets.QLabel(joint_name)
-        name_label.setMinimumWidth(100)
-        self.slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.slider.setMinimum(0)
-        self.slider.setMaximum(self._STEPS)
-        self.value_label = QtWidgets.QLabel()
-        self.value_label.setMinimumWidth(80)
-        layout.addWidget(name_label)
-        layout.addWidget(self.slider, 1)
-        layout.addWidget(self.value_label)
+        name = QtWidgets.QLabel(joint_name.replace('gp_joint_', 'J'))
+        name.setMinimumWidth(28)
+        name.setToolTip(joint_name)
+        self.minus = self._jog_button('\u2212', -1)
+        self.plus = self._jog_button('+', +1)
+        self.bar = QtWidgets.QProgressBar()
+        self.bar.setRange(0, self._STEPS)
+        self.bar.setTextVisible(False)
+        self.bar.setMinimumWidth(40)
+        self.bar.setToolTip(f'{math.degrees(self.lo):.0f} .. {math.degrees(self.hi):.0f} deg')
+        self.value = QtWidgets.QLabel('-')
+        self.value.setMinimumWidth(56)
+        self.value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        layout.addWidget(name)
+        layout.addWidget(self.minus)
+        layout.addWidget(self.bar, 1)
+        layout.addWidget(self.plus)
+        layout.addWidget(self.value)
 
-        self.set_rad(self._rad)
-        self.slider.valueChanged.connect(self._on_slider_changed)
+    def _jog_button(self, text: str, direction: int) -> QtWidgets.QPushButton:
+        btn = QtWidgets.QPushButton(text)
+        btn.setObjectName('jog')
+        btn.setAutoRepeat(False)
+        btn.pressed.connect(lambda: self.pressed.emit(direction))
+        btn.released.connect(self.released.emit)
+        return btn
 
-    def _step_to_rad(self, step: int) -> float:
-        return self.lo + (step / self._STEPS) * (self.hi - self.lo)
-
-    def _rad_to_step(self, rad: float) -> int:
+    def show_position(self, rad: Optional[float]) -> None:
+        if rad is None:
+            self.value.setText('-')
+            return
         frac = (rad - self.lo) / (self.hi - self.lo)
-        return int(round(min(1.0, max(0.0, frac)) * self._STEPS))
-
-    def _on_slider_changed(self, step: int) -> None:
-        self._rad = self._step_to_rad(step)
-        self.value_label.setText(f'{math.degrees(self._rad):6.1f} deg')
-        self.changed.emit()
-
-    def set_rad(self, rad: float, emit: bool = True) -> None:
-        """emit=False only moves the slider (no `changed`, so no command)."""
-        step = self._rad_to_step(rad)
-        self.slider.blockSignals(True)
-        self.slider.setValue(step)
-        self.slider.blockSignals(False)
-        self._rad = self._step_to_rad(step)
-        self.value_label.setText(f'{math.degrees(self._rad):6.1f} deg')
-        if emit:
-            self.changed.emit()
-
-    def get_rad(self) -> float:
-        return self._rad
+        self.bar.setValue(int(round(min(1.0, max(0.0, frac)) * self._STEPS)))
+        self.value.setText(f'{math.degrees(rad):6.1f}\u00b0')
 
 
 class RobotPanel(QtWidgets.QGroupBox):
-    def __init__(self, robot_ns: str, joint_names: list[str], joint_limits: dict, on_change, on_gripper,
-                 read_joints, parent=None):
-        super().__init__(f'Robot: {robot_ns}', parent)
+    """Hold-to-jog per joint (see JOG_*), a speed selector, Home and the
+    suction gripper. Position bars always show the measured joint states."""
+
+    def __init__(self, node: 'TeleopNode', robot_ns: str, parent=None):
+        super().__init__(f'Robot {robot_ns}', parent)
+        self.node = node
         self.robot_ns = robot_ns
-        self.joint_names = joint_names
-        self.on_change = on_change
-        self.on_gripper = on_gripper
-        self.read_joints = read_joints  # () -> Optional[list[float]], the robot's actual joints
-        self.synced_once = False
-        self.rows: dict[str, JointSliderRow] = {}
+        self.joint_names = list(node.robot_joint_names)
+        self.limits = [node.joint_limits.get(n, (-math.pi, math.pi, 1.0)) for n in self.joint_names]
+        self._jog: Optional[tuple[int, int]] = None  # (joint index, direction)
 
         layout = QtWidgets.QVBoxLayout(self)
-        for name in joint_names:
-            lo, hi = joint_limits.get(name, (-math.pi, math.pi))
-            row = JointSliderRow(name, lo, hi)
-            row.changed.connect(self._on_row_changed)
+        speed_row = QtWidgets.QHBoxLayout()
+        speed_row.addWidget(QtWidgets.QLabel('Jog speed'))
+        self.speed_group = QtWidgets.QButtonGroup(self)
+        for i, (label, frac) in enumerate(JOG_SPEEDS):
+            btn = QtWidgets.QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(frac == 0.10)
+            btn.setToolTip(f'{frac * 100:.0f}% of each joint\'s max velocity')
+            self.speed_group.addButton(btn, i)
+            speed_row.addWidget(btn)
+        layout.addLayout(speed_row)
+
+        self.rows: list[JointJogRow] = []
+        for i, name in enumerate(self.joint_names):
+            lo, hi, _ = self.limits[i]
+            row = JointJogRow(name, lo, hi)
+            row.pressed.connect(lambda d, i=i: self._start_jog(i, d))
+            row.released.connect(self._stop_jog)
             layout.addWidget(row)
-            self.rows[name] = row
+            self.rows.append(row)
 
         buttons = QtWidgets.QHBoxLayout()
-        home_btn = QtWidgets.QPushButton('Home (all 0)')
+        home_btn = QtWidgets.QPushButton('Home')
+        home_btn.setToolTip(f'Joint move to all zeros at {HOME_SPEED_FRACTION * 100:.0f}% speed')
         home_btn.clicked.connect(self._go_home)
         buttons.addWidget(home_btn)
-        # Pull the sliders to where the arm really is - e.g. after
-        # navigator_cli or MoveIt moved it - so the next slider touch does
-        # not make the arm jump back to stale slider values.
-        refresh_btn = QtWidgets.QPushButton('Refresh from robot')
-        refresh_btn.setToolTip('Set the sliders to the current joint states (does not move the arm)')
-        refresh_btn.clicked.connect(self.refresh_from_robot)
-        buttons.addWidget(refresh_btn)
-        buttons.addStretch(1)
-
         self.gripper_btn = QtWidgets.QPushButton()
         self.gripper_btn.setCheckable(True)
-        self.gripper_btn.toggled.connect(self._on_gripper_toggled)
-        # Starts OFF: suction is now a latching capture state, so leaving it
-        # ON at startup would mean the arm grabs anything that drifts into
-        # its footprint before the operator asked for it. Nothing is attached
-        # to the arm at startup anymore either - no grasping plugin exists in
-        # the URDF at all now (see gripper_manager.py).
-        self._set_gripper_style(False)
+        self.gripper_btn.clicked.connect(self._on_gripper_clicked)
         buttons.addWidget(self.gripper_btn)
-
         layout.addLayout(buttons)
 
-        self.gripper_status_label = QtWidgets.QLabel('')
-        self.gripper_status_label.setWordWrap(True)
-        layout.addWidget(self.gripper_status_label)
+        self.status_label = QtWidgets.QLabel('')
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
 
-    def _on_row_changed(self) -> None:
-        self.on_change(self.robot_ns, self.current_positions())
+        self._jog_timer = QtCore.QTimer(self)
+        self._jog_timer.timeout.connect(self._jog_tick)
+        self.refresh()
 
-    def current_positions(self) -> list[float]:
-        return [self.rows[name].get_rad() for name in self.joint_names]
+    # ── Jogging ─────────────────────────────────────────────────────────────
+
+    def _speed_fraction(self) -> float:
+        return JOG_SPEEDS[max(0, self.speed_group.checkedId())][1]
+
+    def _start_jog(self, index: int, direction: int) -> None:
+        self._jog = (index, direction)
+        self._jog_tick()
+        self._jog_timer.start(JOG_PERIOD_MS)
+
+    def _stop_jog(self) -> None:
+        was = self._jog
+        self._jog = None
+        self._jog_timer.stop()
+        q = self.node.current_joint_positions(self.robot_ns)
+        if q is not None:
+            self.node.send_joint_positions(self.robot_ns, q, move_time=0.1)  # hold here
+            if was is not None:
+                self.status_label.setText(f'Stopped - holding {self.joint_names[was[0]]} at '
+                                          f'{math.degrees(q[was[0]]):.1f}\u00b0')
+
+    def _jog_tick(self) -> None:
+        if self._jog is None:
+            return
+        q = self.node.current_joint_positions(self.robot_ns)
+        if q is None:
+            self.status_label.setText(f'No joint states on /{self.robot_ns}/joint_states - cannot jog')
+            return
+        i, direction = self._jog
+        if not (self.rows[i].minus.isDown() or self.rows[i].plus.isDown()):
+            self._stop_jog()  # release event lost (focus change, touch) - never keep jogging
+            return
+        lo, hi, vmax = self.limits[i]
+        target = list(q)
+        step = direction * self._speed_fraction() * vmax * JOG_LOOKAHEAD_SEC
+        target[i] = min(hi - LIMIT_MARGIN_RAD, max(lo + LIMIT_MARGIN_RAD, q[i] + step))
+        self.node.send_joint_positions(self.robot_ns, target, move_time=JOG_LOOKAHEAD_SEC)
+        at_limit = target[i] in (hi - LIMIT_MARGIN_RAD, lo + LIMIT_MARGIN_RAD)
+        self.status_label.setText(
+            f'Jogging {self.joint_names[i]} {"+" if direction > 0 else "-"} at '
+            f'{self._speed_fraction() * vmax:.2f} rad/s' + (' - at the joint limit' if at_limit else ''))
 
     def _go_home(self) -> None:
-        for row in self.rows.values():
-            row.set_rad(0.0, emit=False)
-        self._on_row_changed()  # one command for all joints
+        q = self.node.current_joint_positions(self.robot_ns)
+        if q is None:
+            self.status_label.setText('No joint states yet')
+            return
+        # Slowest joint sets the time, so no joint exceeds HOME_SPEED_FRACTION.
+        t = max([abs(a) / (HOME_SPEED_FRACTION * lim[2]) for a, lim in zip(q, self.limits)] + [1.0])
+        self.node.send_joint_positions(self.robot_ns, [0.0] * len(q), move_time=t)
+        self.status_label.setText(f'Moving home in {t:.1f}s (sim time)')
 
-    def refresh_from_robot(self) -> bool:
-        positions = self.read_joints()
-        if positions is None:
-            self.gripper_status_label.setText(f'FAILED: no joint states on /{self.robot_ns}/joint_states yet')
-            return False
-        for name, rad in zip(self.joint_names, positions):
-            self.rows[name].set_rad(rad, emit=False)
-        self.synced_once = True
-        self.gripper_status_label.setText('OK: sliders set to the current joint states')
-        return True
+    # ── Gripper ─────────────────────────────────────────────────────────────
 
-    def _on_gripper_toggled(self, checked: bool) -> None:
-        self._set_gripper_style(checked)
-        ok, message = self.on_gripper(self.robot_ns, checked)
-        self.gripper_status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
-        if not ok:
-            # Attach was refused (too far/no box) - reflect that the
-            # gripper is NOT actually holding anything, rather than leaving
-            # the button showing a successful "ON" it didn't achieve.
-            self.gripper_btn.blockSignals(True)
-            self.gripper_btn.setChecked(False)
-            self.gripper_btn.blockSignals(False)
-            self._set_gripper_style(False)
+    def _on_gripper_clicked(self, checked: bool) -> None:
+        ok, message = self.node.set_gripper(self.robot_ns, checked)
+        self.status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
+        self.refresh()
 
-    def _set_gripper_style(self, on: bool) -> None:
-        self.gripper_btn.setText('Gripper: ON' if on else 'Gripper: OFF')
-        color = '#2e7d32' if on else '#616161'
+    # ── Live state ──────────────────────────────────────────────────────────
+
+    def refresh(self) -> None:
+        q = self.node.current_joint_positions(self.robot_ns)
+        for i, row in enumerate(self.rows):
+            row.show_position(None if q is None else q[i])
+        g = self.node.gripper_states.get(self.robot_ns)
+        on = bool(g and g.suction_on)
+        held = list(g.grasped) if g else []
+        self.gripper_btn.blockSignals(True)
+        self.gripper_btn.setChecked(on)
+        self.gripper_btn.blockSignals(False)
+        text = ('Suction ON' + (f' ({len(held)} held)' if held else '')) if on else 'Suction OFF'
+        color = (STATUS_COLORS['busy'] if held else STATUS_COLORS['ok']) if on else STATUS_COLORS['off']
+        self.gripper_btn.setText(text)
         self.gripper_btn.setStyleSheet(f'background-color: {color}; color: white; font-weight: bold;')
 
 
@@ -717,7 +822,7 @@ class InfeedLinePanel(QtWidgets.QGroupBox):
         self.enable_btn = QtWidgets.QPushButton()
         self.enable_btn.setCheckable(True)
         self.enable_btn.clicked.connect(self._on_enable_clicked)
-        self.release_btn = QtWidgets.QPushButton('Release box (restart line)')
+        self.release_btn = QtWidgets.QPushButton('Release box')
         self.release_btn.setToolTip('Ignore the box at the beam: run the belt until it has passed')
         self.release_btn.clicked.connect(self._on_release_clicked)
 
@@ -781,7 +886,7 @@ class InfeedLinePanel(QtWidgets.QGroupBox):
         self.enable_btn.blockSignals(True)
         self.enable_btn.setChecked(enabled)
         self.enable_btn.blockSignals(False)
-        self.enable_btn.setText('Line: ON (click to stop)' if enabled else 'Line: OFF (click to start)')
+        self.enable_btn.setText('Line ON - stop' if enabled else 'Line OFF - start')
 
     def _report(self, ok: bool, message: str) -> None:
         self.status_label.setText(('OK: ' if ok else 'FAILED: ') + message)
@@ -793,74 +898,271 @@ class InfeedLinePanel(QtWidgets.QGroupBox):
         self.node.release_line(self._report)
 
 
+class FlowLayout(QtWidgets.QLayout):
+    """Left-to-right layout that wraps onto new lines (Qt's flow layout example)."""
+
+    def __init__(self, parent=None, spacing: int = 6):
+        super().__init__(parent)
+        self._items = []
+        self._spacing = spacing
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return QtCore.Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QtCore.QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, apply=True)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QtCore.QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QtCore.QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _arrange(self, rect, apply: bool) -> int:
+        x, y, line_h = rect.x(), rect.y(), 0
+        for item in self._items:
+            w, h = item.sizeHint().width(), item.sizeHint().height()
+            if x + w > rect.right() and line_h > 0:
+                x, y, line_h = rect.x(), y + line_h + self._spacing, 0
+            if apply:
+                item.setGeometry(QtCore.QRect(QtCore.QPoint(x, y), item.sizeHint()))
+            x += w + self._spacing
+            line_h = max(line_h, h)
+        return y + line_h - rect.y()
+
+
+class StatusChip(QtWidgets.QLabel):
+    def __init__(self, name: str, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.set('off', '-')
+
+    def set(self, level: str, text: str, tooltip: str = '') -> None:
+        self.setText(f'<b>{self.name}</b> {text}')
+        self.setToolTip(tooltip or text)
+        self.setStyleSheet(f'background-color: {STATUS_COLORS[level]}; color: white; '
+                           f'border-radius: 10px; padding: 4px 10px;')
+
+
+class StatusBanner(QtWidgets.QWidget):
+    """Workcell status at a glance - one coloured chip per subsystem, wrapping
+    onto more lines on a narrow window. Refreshed by the main window's tick."""
+    STALE_SEC = 3.0
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__(parent)
+        self.node = node
+        self.ns = node.robot_namespaces[0] if node.robot_namespaces else 'robot_1'
+        self.chips = {k: StatusChip(k) for k in
+                      ('Sim', 'Robot', 'Planner', 'Navigator', 'Gripper', 'Line', 'Factory', 'Demo')}
+        flow = FlowLayout(self)
+        flow.setContentsMargins(4, 4, 4, 4)
+        for chip in self.chips.values():
+            flow.addWidget(chip)
+
+    def _fresh(self, stamp: float) -> bool:
+        return time.monotonic() - stamp < self.STALE_SEC
+
+    def refresh(self) -> None:
+        n, c, ns = self.node, self.chips, self.ns
+
+        if not self._fresh(n.clock_stamp):
+            c['Sim'].set('bad', 'no /clock', 'Gazebo not running (workcell.launch.py) or paused')
+        else:
+            rtf = n.sim_rtf
+            level = 'ok' if rtf is None or rtf > 0.5 else 'warn'
+            c['Sim'].set(level, f'{rtf:.2f}x' if rtf is not None else 'running',
+                         'Gazebo real-time factor (sim seconds per wall second)')
+
+        if self._fresh(n.joint_state_stamp.get(ns, 0.0)):
+            c['Robot'].set('ok', 'joint states', f'/{ns}/joint_states arriving')
+        else:
+            c['Robot'].set('bad', 'no joint states', f'nothing on /{ns}/joint_states')
+
+        up = n.has_service
+        c['Planner'].set('ok' if up(f'/{ns}/cumotion/motion_plan/_action/send_goal') else 'off',
+                         'up' if up(f'/{ns}/cumotion/motion_plan/_action/send_goal') else 'down',
+                         'cuMotion MotionPlan action (cumotion.launch.py)')
+        c['Navigator'].set('ok' if up(f'/{ns}/navigator/navigate_to_node/_action/send_goal') else 'off',
+                           'up' if up(f'/{ns}/navigator/navigate_to_node/_action/send_goal') else 'down',
+                           'navigator_server actions (demo.launch.py / navigator_server.launch.py)')
+
+        g = n.gripper_states.get(ns)
+        if g is None:
+            c['Gripper'].set('off', '-', 'no gripper/state (gripper_manager not running?)')
+        elif g.grasped:
+            c['Gripper'].set('busy', f'holding {len(g.grasped)}', ', '.join(g.grasped))
+        else:
+            c['Gripper'].set('warn' if g.suction_on else 'off', 'suction on' if g.suction_on else 'off')
+
+        st = n.line_state if self._fresh(n.line_state_stamp) else None
+        if st is None:
+            c['Line'].set('off', 'no controller', 'infeed_line.launch.py not running')
+        else:
+            text, level = {InfeedLineState.MODE_DISABLED: ('off', 'off'),
+                           InfeedLineState.MODE_RUNNING: ('running', 'ok'),
+                           InfeedLineState.MODE_BLOCKED: ('box at beam', 'bad'),
+                           InfeedLineState.MODE_RELEASED: ('released', 'busy')}.get(st.mode, ('?', 'warn'))
+            c['Line'].set(level, text, f'beam {"blocked" if st.beam_blocked else "clear"}, '
+                                      f'{st.boxes_stopped} boxes stopped')
+
+        fs = n.factory_status if self._fresh(n.factory_status_stamp) else None
+        if fs is None:
+            c['Factory'].set('off', 'not running')
+        elif not fs.enabled:
+            c['Factory'].set('off', f'off ({fs.boxes_spawned})')
+        elif fs.paused_by_line:
+            c['Factory'].set('warn', f'paused ({fs.boxes_spawned})', 'feeding line stopped')
+        else:
+            c['Factory'].set('ok', f'spawning ({fs.boxes_spawned})', f'last box {fs.last_box}')
+
+        demo_up = up('/workcell_demo/set_enabled')
+        text = n.demo_state if demo_up and n.demo_state else None
+        if text is None:
+            c['Demo'].set('off', 'not running', 'demo.launch.py')
+        else:
+            state = text.split('|')[0].strip()
+            level = {'ERROR': 'bad', 'WAITING': 'ok', 'DISABLED': 'off', 'STARTING': 'warn'}.get(state, 'busy')
+            c['Demo'].set(level, state.lower(), text)
+
+
+class ResponsiveColumns(QtWidgets.QWidget):
+    """Lays the panels out in as many columns as fit (column_width px each,
+    up to max_columns), re-flowing on resize - three side by side on a wide
+    screen, one below the other on a phone-sized window."""
+
+    def __init__(self, panels: list, column_width: int = 400, max_columns: int = 3, parent=None):
+        super().__init__(parent)
+        self.panels = panels
+        self.column_width = column_width
+        self.max_columns = max_columns
+        self._columns = 0
+        self._row = QtWidgets.QHBoxLayout(self)
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._reflow(1)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        n = max(1, min(self.max_columns, event.size().width() // self.column_width))
+        if n != self._columns:
+            self._reflow(n)
+
+    def _reflow(self, n: int) -> None:
+        self._columns = n
+        while self._row.count():
+            item = self._row.takeAt(0)
+            if item.layout():
+                while item.layout().count():
+                    item.layout().takeAt(0)
+        columns = [QtWidgets.QVBoxLayout() for _ in range(n)]
+        # Fill column by column in order, balancing by panel height.
+        heights = [0] * n
+        for panel in self.panels:
+            col = heights.index(min(heights)) if n > 1 else 0
+            columns[col].addWidget(panel)
+            heights[col] += panel.sizeHint().height()
+        for col in columns:
+            col.addStretch(1)
+            self._row.addLayout(col, 1)
+
+
+class ConveyorsPanel(QtWidgets.QGroupBox):
+    def __init__(self, node: 'TeleopNode', on_change, parent=None):
+        super().__init__('Conveyors', parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        for ns in node.conveyor_namespaces:
+            row = ConveyorPanel(ns.replace('conveyor_', ''), node.conveyor_max_speed,
+                                lambda _name, speed, ns=ns: on_change(ns, speed))
+            row.setFlat(True)
+            layout.addWidget(row)
+
+
+APP_STYLE = """
+QWidget { font-size: 11pt; }
+QGroupBox { font-weight: bold; border: 1px solid #9e9e9e; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
+QPushButton { min-height: 34px; padding: 2px 10px; }
+QPushButton#jog { min-width: 44px; min-height: 40px; font-size: 16pt; font-weight: bold; }
+QPushButton:checked { background-color: #1565c0; color: white; }
+QSlider { min-height: 30px; }
+QProgressBar { min-height: 16px; }
+QDoubleSpinBox, QComboBox { min-height: 30px; }
+"""
+
+
 class TeleopMainWindow(QtWidgets.QMainWindow):
     def __init__(self, node: TeleopNode):
         super().__init__()
         self.node = node
         self.setWindowTitle('Workcell Teleop')
 
+        self._robot_panels = [RobotPanel(node, ns) for ns in node.robot_namespaces]
+        self._line_panel = InfeedLinePanel(node)
+        self._factory_panel = FactoryPanel(node.configure_factory)
+        panels = [*self._robot_panels, self._line_panel, self._factory_panel,
+                  ConveyorsPanel(node, self._on_conveyor_changed),
+                  SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z)]
+
+        self._banner = StatusBanner(node)
+        body = ResponsiveColumns(panels)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setWidget(body)
+
         central = QtWidgets.QWidget()
+        outer = QtWidgets.QVBoxLayout(central)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.addWidget(self._banner)
+        outer.addWidget(scroll, 1)
         self.setCentralWidget(central)
-        outer = QtWidgets.QHBoxLayout(central)
 
-        robots_col = QtWidgets.QVBoxLayout()
-        robots_col.addWidget(QtWidgets.QLabel('<b>Robots</b>'))
-        self._robot_panels: list[RobotPanel] = []
-        for ns in node.robot_namespaces:
-            panel = RobotPanel(ns, node.robot_joint_names, node.joint_limits, self._on_robot_changed,
-                               self._on_gripper_toggled, lambda ns=ns: node.current_joint_positions(ns))
-            robots_col.addWidget(panel)
-            self._robot_panels.append(panel)
-        robots_col.addStretch(1)
-
-        conveyors_col = QtWidgets.QVBoxLayout()
-        conveyors_col.addWidget(QtWidgets.QLabel('<b>Conveyors</b>'))
-        for ns in node.conveyor_namespaces:
-            panel = ConveyorPanel(ns, node.conveyor_max_speed, self._on_conveyor_changed)
-            conveyors_col.addWidget(panel)
-        conveyors_col.addStretch(1)
-
-        scene_col = QtWidgets.QVBoxLayout()
-        scene_col.addWidget(QtWidgets.QLabel('<b>Scene</b>'))
-        scene_col.addWidget(SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z))
-        self._line_panel = InfeedLinePanel(self.node)
-        scene_col.addWidget(self._line_panel)
-        self._factory_panel = FactoryPanel(self.node.configure_factory)
-        scene_col.addWidget(self._factory_panel)
-        scene_col.addStretch(1)
-
-        outer.addLayout(robots_col, 2)
-        outer.addLayout(conveyors_col, 1)
-        outer.addLayout(scene_col, 1)
-
-        # Nothing here subscribes to anything (pure command UI), but pumping
-        # the executor completes box_factory's async set_parameters replies
-        # (FactoryPanel status) and keeps the node responsive to ROS-side
-        # events (parameter changes, discovery) without blocking Qt's own
-        # event loop - spin_once/spin can't run in the same thread as exec_().
+        # ROS spins in the Qt thread: drain every ready callback each tick
+        # (joint states alone arrive faster than one-callback-per-tick).
         self._ros_timer = QtCore.QTimer(self)
         self._ros_timer.timeout.connect(self._on_ros_tick)
         self._ros_timer.start(50)
+        self._graph_timer = QtCore.QTimer(self)
+        self._graph_timer.timeout.connect(self.node.poll_graph)
+        self._graph_timer.start(1000)
+        self.node.poll_graph()
 
     def _on_ros_tick(self) -> None:
-        rclpy.spin_once(self.node, timeout_sec=0)
+        for _ in range(50):
+            rclpy.spin_once(self.node, timeout_sec=0)
+        self._banner.refresh()
         self._line_panel.refresh()
         fresh = time.monotonic() - self.node.factory_status_stamp < 3.0
         self._factory_panel.refresh(self.node.factory_status if fresh else None)
-        # Sliders start at 0 while the arm is wherever it is - sync them once
-        # as soon as each robot's first joint state arrives.
         for panel in self._robot_panels:
-            if not panel.synced_once and self.node.current_joint_positions(panel.robot_ns) is not None:
-                panel.refresh_from_robot()
-
-    def _on_robot_changed(self, robot_ns: str, positions: list[float]) -> None:
-        self.node.send_joint_positions(robot_ns, positions)
+            panel.refresh()
 
     def _on_conveyor_changed(self, conveyor_ns: str, speed: float) -> None:
         self.node.send_belt_speed(conveyor_ns, speed)
-
-    def _on_gripper_toggled(self, robot_ns: str, on: bool) -> tuple[bool, str]:
-        return self.node.set_gripper(robot_ns, on)
 
     def _on_spawn_box(self, width: float, depth: float, height: float, x: float, y: float, z: float) -> tuple[bool, str]:
         return self.node.spawn_box(width, depth, height, x, y, z)
@@ -871,8 +1173,9 @@ def main():
     node = TeleopNode()
 
     app = QtWidgets.QApplication(sys.argv)
+    app.setStyleSheet(APP_STYLE)
     win = TeleopMainWindow(node)
-    win.resize(1150, 850)
+    win.resize(1280, 860)
     win.show()
     try:
         app.exec_()

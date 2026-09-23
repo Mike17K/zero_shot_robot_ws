@@ -52,11 +52,27 @@ It uses, all under `/<namespace>/`:
 | `e -t` / `t` | Move the tool to a pose you type in (direct plan, else via the closest node) |
 | `s <id>` | Show the path to node `<id>` without moving |
 | `ta s <key>` / `ta <key>` / `ta i` / `ta l` / `ta clear` | Save, move to, type in, list or clear named joint positions |
-| `suction on\|off`, `on`, `off` | Suction gripper |
+| `gripper on\|off`, `g on\|off`, `suction on\|off`, `on`, `off` | Suction gripper |
+| `cart <dx> <dy> <dz> [-tool] [-speed=0.05]` | Straight-line tool move (MoveIt `compute_cartesian_path`), world axes or the tool's own with `-tool` (asks y/N first) |
 | `home` | Move to the XRDF default joint position |
 | `help`, `exit` | |
 
 Typical teaching loop: jog the arm with the teleop UI sliders (`ros2 launch workcell_teleop teleop.launch.py`), `a` to add the pose (it asks for a label, whether paths may start from it, and which node to connect it to), repeat, then `e <id>` to replay.
+
+## Action server
+
+`navigator_server` offers the same navigation over ROS 2, for the demo and any other script:
+
+```bash
+ros2 launch navigator_cli navigator_server.launch.py namespace:=robot_1
+```
+
+| Interface | Type | What |
+| --------- | ---- | ---- |
+| `/<ns>/navigator/navigate_to_node` | `custom_msgs/action/NavigateToNode` | graph path (or `direct` joint move) to a node id or label, feedback per segment |
+| `/<ns>/navigator/cartesian_move` | `custom_msgs/action/CartesianMove` | straight-line tool offset, `world` or `tool` axes |
+
+One motion at a time (a second goal is rejected); cancel stops the running trajectory; the graph file is reloaded for every goal. From Python, use `shared_utils.navigation.NavigatorClient` (`navigate()`, `cartesian()`, `gripper()`, `holding()`).
 
 ## Data
 

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from ..shared.constants import CANONICAL_EE_GROUP
 from ..shared.graph import Graph
@@ -63,9 +63,17 @@ def find_and_move_to_node_logic(
     graph: Graph,
     selected_groups: List[str],
     interactive: bool = False,
+    on_segment: Optional[Callable[[int, int, int], None]] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
+    options: Optional[TrajectoryMovementOptions] = None,
 ) -> bool:
     """Move from the current state onto the graph (if not on a node already)
-    and along the shortest path to node_id, one joint goal per edge."""
+    and along the shortest path to node_id, one joint goal per edge.
+
+    on_segment(segment, segments, next_node_id) is called before each move
+    (segment 0 = moving onto the graph); should_stop() is checked between
+    moves - both for navigator_server's action feedback / cancel. options
+    apply to every move whose edge has none of its own."""
     if not graph.adjacency:
         Logger.WARN("Graph is empty. Cannot execute path.")
         return False
@@ -98,15 +106,26 @@ def find_and_move_to_node_logic(
         Logger.INFO("Execution cancelled by user.")
         return False
 
-    if not at_start and not robot.execute_joint_goal(CANONICAL_EE_GROUP, start_node.canonical.joints):
+    segments = len(path) - 1
+    if not at_start:
+        if on_segment:
+            on_segment(0, segments, graph._get_or_assign_id(start_node))
+    if not at_start and not robot.execute_joint_goal(CANONICAL_EE_GROUP, start_node.canonical.joints,
+                                                     options=options):
         Logger.ERROR(f"Failed to reach start node ID {graph._get_or_assign_id(start_node)}.")
         return False
 
-    for i, (pose, move_group, options) in enumerate(path[1:], start=1):
+    for i, (pose, move_group, edge_options) in enumerate(path[1:], start=1):
+        if should_stop and should_stop():
+            Logger.WARN("Path execution stopped on request.")
+            return False
         group = move_group or CANONICAL_EE_GROUP
-        Logger.INFO(f"Segment {i}/{len(path) - 1} -> node ID {graph._get_or_assign_id(pose)} via '{group}'")
-        ok = (robot.execute_joint_goal(group, pose.all_ee_poses[group].joints, options=options)
-              if pose.is_joint_goal else robot.execute_pose_goal(group, pose, options=options))
+        opts = edge_options or options
+        Logger.INFO(f"Segment {i}/{segments} -> node ID {graph._get_or_assign_id(pose)} via '{group}'")
+        if on_segment:
+            on_segment(i, segments, graph._get_or_assign_id(pose))
+        ok = (robot.execute_joint_goal(group, pose.all_ee_poses[group].joints, options=opts)
+              if pose.is_joint_goal else robot.execute_pose_goal(group, pose, options=opts))
         if not ok:
             Logger.ERROR(f"Failed at node ID {graph._get_or_assign_id(pose)}. Stopping path execution.")
             return False

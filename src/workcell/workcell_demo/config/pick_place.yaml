@@ -1,0 +1,15 @@
+# workcell_demo pick_place_demo parameters (see pick_place_demo.py).
+/**:
+  ros__parameters:
+    robot_namespace: "robot_1"
+    line_namespace: "conveyor_package_infeed"
+    # Pose-graph nodes (navigator_cli config/pose_graph.json) - ids or labels.
+    pick_node: "6"                  # above the box waiting at the beam
+    place_nodes: ["2", "3", "4"]    # ConvaiorLeft / ConvaiorMiddle / ConvaiorRight
+    place_order: "round_robin"      # or "random"
+    home_node: "5"                  # InspectionPoint - idle pose
+    approach_distance: 0.10         # m, straight down before suction / up after
+    approach_speed: 0.05            # m/s
+    grasp_wait_sec: 3.0             # wall time for gripper_manager to report the grasp
+    start_enabled: true
+    go_home_on_start: true

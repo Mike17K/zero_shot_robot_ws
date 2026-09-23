@@ -19,7 +19,7 @@ class SuctionCLIFunction(CLIFunctionBase):
 
     @staticmethod
     def __str__():
-        return "Suction gripper on/off. Usage: " + SuctionCLIFunction.name + " on|off"
+        return "Suction gripper on/off. Usage: suction on|off (also: gripper on|off, g on|off, on, off)"
 
     def execute(self, args: List[str] = None, kwargs: Dict[str, Any] = None):
         if not args or args[0] not in ('on', 'off'):

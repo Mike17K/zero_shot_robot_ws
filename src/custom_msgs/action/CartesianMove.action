@@ -1,0 +1,11 @@
+# Straight-line move of the tool (gripper_tcp) by an offset
+# (navigator_cli's navigator_server, /<robot>/navigator/cartesian_move).
+geometry_msgs/Vector3 offset   # meters
+string frame                   # "world" (default) or "tool" (gripper_tcp axes, +Z out of the cups)
+float64 speed                  # max tool speed, m/s; 0 = the server default
+---
+bool success
+string message
+float64 fraction               # part of the line that could be followed (1.0 = all)
+---
+string status

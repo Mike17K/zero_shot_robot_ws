@@ -29,7 +29,7 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     # Nothing here caps HOW MANY objects can be grasped or spawned.
     args.append(DeclareLaunchArgument("suction_half_width", default_value="0.17", description="Half-width (X) of the suction footprint in the gripper TCP frame, meters"))
     args.append(DeclareLaunchArgument("suction_half_length", default_value="0.22", description="Half-length (Y) of the suction footprint in the gripper TCP frame, meters"))
-    args.append(DeclareLaunchArgument("suction_reach", default_value="0.06", description="How far in front of the cups (+Z in the TCP frame) an object can be and still be sucked up, meters"))
+    args.append(DeclareLaunchArgument("suction_reach", default_value="0.01", description="How far in front of the cup tips (gripper_tcp, +Z) an object surface can be and still be sucked up, meters - small, so the cups must nearly touch the box"))
     args.append(DeclareLaunchArgument("graspable_prefixes", default_value="['box']", description="YAML list of model-name prefixes gripper_manager treats as graspable - keeps the arm's own links and the conveyor rollers out of consideration"))
     args.append(DeclareLaunchArgument("world_name", default_value="default", description="Gazebo world name (see workcell_description/worlds/workcell_world.sdf's <world name=...>) - used by gripper_manager's spawn_box for the /world/<name>/create and /world/<name>/remove services"))
     return args

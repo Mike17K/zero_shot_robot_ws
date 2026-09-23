@@ -10,7 +10,7 @@ from std_srvs.srv import SetBool
 from shared_utils.execution import TrajectoryExecutor
 from shared_utils.geometry import TfHelper, make_pose_stamped
 from shared_utils.joint_state import JointStateCache
-from shared_utils.planning import GP70L_JOINTS, CumotionClient
+from shared_utils.planning import GP70L_JOINTS, CartesianPlanner, CartesianResult, CumotionClient
 from shared_utils.ros_helpers import call_service
 
 from ...shared.constants import AVAILABLE_GROUPS
@@ -33,6 +33,8 @@ class Gp70lRobotManager(BaseRobotManager):
         self.joint_states = JointStateCache(node, f'/{ns}/joint_states')
         self.tf = TfHelper(node, f'/{ns}/tf')
         self.planner = CumotionClient(node, namespace=ns, joint_names=self.joint_names, tf=self.tf)
+        self.cartesian = CartesianPlanner(node, self.tf, namespace=ns, tool_frame=tool_frame,
+                                          world_frame=world_frame)
         self.executor = TrajectoryExecutor(
             node, f'/{ns}/{controller}/follow_joint_trajectory', self.joint_states)
         self._fk_client = node.create_client(GetPositionFK, f'/{ns}/compute_fk')
@@ -101,6 +103,20 @@ class Gp70lRobotManager(BaseRobotManager):
                                    quat=(state.rot.x, state.rot.y, state.rot.z, state.rot.w))
         return self._plan_and_execute(
             lambda speed: self.planner.plan_to_pose(target, time_dilation_factor=speed), options)
+
+    def execute_cartesian(self, offset, frame: str = 'world', max_speed: float = 0.05) -> CartesianResult:
+        """Straight-line tool move by offset (m), 'world' or 'tool' axes. Blocking."""
+        result = self.cartesian.plan_offset(offset, frame=frame, max_speed=max_speed)
+        if not result.success:
+            Logger.ERROR(f'cartesian move: {result.message}')
+            return result
+        if not self.executor.execute(result.trajectory):
+            result.success, result.message = False, 'execution failed'
+        return result
+
+    def cancel_motion(self) -> bool:
+        """Stop the trajectory currently executing (from another thread)."""
+        return self.executor.cancel()
 
     def set_suction(self, on: bool) -> bool:
         response = call_service(self._node, self._suction_client, SetBool.Request(data=bool(on)))

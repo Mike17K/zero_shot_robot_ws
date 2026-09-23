@@ -1,91 +1,104 @@
 #!/bin/bash
-# Shared panel plan for launch_from_host_ws.sh / launch_from_container_ws.sh.
-# Sourced after utils.sh; the caller sets ENTER_CONTAINER=true when every
-# pane first has to `bash scripts/shell.sh` into the container.
+# Pane plan for launch_from_host_ws.sh / launch_from_container_ws.sh, plus the
+# Terminator config generator. Sourced by those scripts and by pane.sh.
 #
-# Commands are pasted but NOT run - press Enter in each pane, top to bottom
-# in this order: Workcell, Infeed line, cuMotion, RViz, Teleop, then Navigator once the
-# robot is up (it needs /robot_1/joint_states, TF and cumotion/motion_plan).
+# Every pane runs scripts/launch/pane.sh (Terminator's per-terminal
+# `command`), which prepares the ROS environment inside the container and
+# leaves the pane's command pre-filled on the prompt: check it, press Enter.
+# No keystroke automation (xdotool) is involved, so a command can no longer
+# land in the wrong pane.
+#
+# Suggested start order = the number in each pane title. The navigator and
+# the demo need the robot up (/robot_1/joint_states, TF, cumotion/motion_plan).
 
 ROS_DOMAIN_ID=40  # matches the container root .bashrc (setup_workspace.sh)
 ROS_DISTRO="jazzy"
 CONTAINER_WS="/workspaces/isaac_ros-dev"
 
-# Prepares every pane INSIDE the container. The venv is optional (it does
-# not exist in a fresh container) - an unconditional `source` of it used to
-# break this && chain, so ROS_DOMAIN_ID/RMW were never exported.
-GLOBAL_CMD="cd $CONTAINER_WS && source /opt/ros/$ROS_DISTRO/setup.bash && source $CONTAINER_WS/install/setup.bash \
-&& { [ ! -f $CONTAINER_WS/.venv/bin/activate ] || source $CONTAINER_WS/.venv/bin/activate; } \
-&& export ISAAC_ROS_WS=$CONTAINER_WS && export PYTHONPATH=\$PYTHONPATH:$CONTAINER_WS/external \
-&& export ROS_DOMAIN_ID=$ROS_DOMAIN_ID && export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-&& export CYCLONEDDS_URI=file://$CONTAINER_WS/cyclonedds.xml"
+# "title|command" - left column top to bottom, then the right column.
+# An empty command gives a plain prepared shell.
+PANES_LEFT=(
+    "1 Workcell (Gazebo)|ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardware:=false"
+    "nvblox|ros2 launch vision nvblox.launch.py"
+    "6 Navigator CLI|ros2 run navigator_cli navigator_cli --ros-args -p namespace:=robot_1"
+    "cuMotion test (plan only - add --execute to move)|ros2 run shared_utils cumotion_cli joints 0 -0.35 0.35 0 -0.52 0"
+    "7 Demo (navigator server + pick and place)|ros2 launch workcell_demo demo.launch.py"
+)
+PANES_RIGHT=(
+    "3 cuMotion planner|ros2 launch planning_bringup cumotion.launch.py namespace:=robot_1 sim_gazebo:=true"
+    "4 RViz|ros2 launch workcell_bringup rviz.launch.py rviz_namespace:=robot_1"
+    "5 Teleop UI|ros2 launch workcell_teleop teleop.launch.py"
+    "2 Infeed line (laser beam + line controller)|ros2 launch workcell_bringup infeed_line.launch.py"
+    "Scratch|"
+)
+PANES=("${PANES_LEFT[@]}" "${PANES_RIGHT[@]}")
 
-# ── Panel layout (scripts/config/terminator_config's GazeboLayout) ─────────
-#   left column              | right column
-#   terminal0  Workcell      | terminal4  cuMotion planner
-#   terminal1  nvblox        | terminal5  RViz
-#   terminal2  Navigator CLI | terminal6  Teleop UI
-#   terminal3  cuMotion test | terminal7  Infeed line
-# Terminator's Alt+arrow jumps to the geometrically nearest pane, which is
-# ambiguous across the unevenly split columns - so every step first
-# saturates to the top-left corner (extra moves past an edge are no-ops),
-# then goes right at most once and down n times within one column.
-reset_to_top_left() {
-    move_up
-    move_up
-    move_up
-    move_up
-    move_left
+# Environment every pane gets inside the container. The venv is optional (a
+# fresh container has none).
+pane_env() {
+    cd "$CONTAINER_WS" || return 1
+    source /opt/ros/$ROS_DISTRO/setup.bash
+    [ -f "$CONTAINER_WS/install/setup.bash" ] && source "$CONTAINER_WS/install/setup.bash"
+    [ -f "$CONTAINER_WS/.venv/bin/activate" ] && source "$CONTAINER_WS/.venv/bin/activate"
+    export ISAAC_ROS_WS=$CONTAINER_WS
+    export PYTHONPATH=$PYTHONPATH:$CONTAINER_WS/external
+    export ROS_DOMAIN_ID=$ROS_DOMAIN_ID
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI=file://$CONTAINER_WS/cyclonedds.xml
 }
 
-goto_pane() {  # goto_pane <column 0|1> <row 0-3>
-    reset_to_top_left
-    [ "$1" = "1" ] && move_right
-    for ((i = 0; i < $2; i++)); do move_down; done
+_terminal() {  # _terminal <pane index> <parent> <order>
+    local title=${PANES[$1]%%|*}
+    printf '    [[[terminal%s]]]\n      type = Terminal\n      parent = %s\n      order = %s\n      title = %s\n      command = %s %s\n' \
+        "$1" "$2" "$3" "$title" "$PANE_LAUNCHER" "$1"
 }
 
-launch_panels() {
-    reset_to_top_left
+# One column of `count` equal-height rows: a chain of VPaneds, each splitting
+# off the top row with ratio 1/(rows left) - so all rows get the same height.
+_column() {  # _column <parent> <order> <name> <first pane index> <count>
+    local parent=$1 order=$2 name=$3 first=$4 count=$5 i
+    local up=$parent ord=$order
+    for ((i = 0; i < count - 1; i++)); do
+        printf '    [[[%s_%s]]]\n      type = VPaned\n      parent = %s\n      order = %s\n      ratio = %s\n' \
+            "$name" "$i" "$up" "$ord" "$(awk -v n=$((count - i)) 'BEGIN{printf "%.4f", 1.0 / n}')"
+        _terminal "$((first + i))" "${name}_$i" 0
+        up="${name}_$i"
+        ord=1
+    done
+    _terminal "$((first + count - 1))" "$up" "$ord"
+}
 
-    broadcast_on
-    if [ "$ENTER_CONTAINER" = "true" ]; then
-        paste_cmd "bash scripts/shell.sh" && enter
-        sleep 5
-    fi
-    paste_cmd "$GLOBAL_CMD && clear"
-    enter
-    broadcast_off
+# write_terminator_config <file> <layout name> - PANE_LAUNCHER must be the
+# command that runs pane.sh for a pane index (host or container side).
+write_terminator_config() {
+    local file=$1 layout=$2
+    {
+        cat <<'EOF'
+[global_config]
+  suppress_multiple_term_dialog = True
+[keybindings]
+  broadcast_off = <Primary><Shift>h
+  broadcast_all = <Primary><Shift>a
+[profiles]
+  [[default]]
+    scrollback_lines = 5000
+[layouts]
+EOF
+        printf '  [[%s]]\n    [[[window0]]]\n      type = Window\n      parent = ""\n' "$layout"
+        printf '    [[[split_horiz]]]\n      type = HPaned\n      parent = window0\n      ratio = 0.5\n'
+        _column split_horiz 0 left 0 ${#PANES_LEFT[@]}
+        _column split_horiz 1 right ${#PANES_LEFT[@]} ${#PANES_RIGHT[@]}
+        echo "[plugins]"
+    } > "$file"
+}
 
-    goto_pane 0 0
-    paste_cmd 'ros2 launch workcell_bringup workcell.launch.py sim_gazebo:=true use_fake_hardware:=false'
-
-    goto_pane 0 1
-    paste_cmd 'ros2 launch vision nvblox.launch.py'
-
-    # Interactive pose-graph navigator (src/planning/navigator_cli). Graphs
-    # are saved to the source config/ folder (ISAAC_ROS_WS is exported above).
-    goto_pane 0 2
-    paste_cmd 'ros2 run navigator_cli navigator_cli --ros-args -p namespace:=robot_1'
-
-    # One-shot planner check without moving the arm (add --execute to move).
-    goto_pane 0 3
-    paste_cmd 'ros2 run shared_utils cumotion_cli joints 0 -0.35 0.35 0 -0.52 0'
-
-    # sim_gazebo:=true -> use_sim_time, matching the Gazebo-driven robot.
-    goto_pane 1 0
-    paste_cmd 'ros2 launch planning_bringup cumotion.launch.py namespace:=robot_1 sim_gazebo:=true'
-
-    goto_pane 1 1
-    paste_cmd 'ros2 launch workcell_bringup rviz.launch.py rviz_namespace:=robot_1'
-
-    # Joint sliders, gripper, conveyor speeds, Spawn Box and Box Factory -
-    # see src/workcell/workcell_teleop.
-    goto_pane 1 2
-    paste_cmd 'ros2 launch workcell_teleop teleop.launch.py'
-
-    # Feeding line: laser beam in front of the robot + controller that stops
-    # the infeed belt while a box waits (start after the workcell is up - it
-    # spawns the beam sensor into Gazebo). Status/controls: teleop Infeed Line.
-    goto_pane 1 3
-    paste_cmd 'ros2 launch workcell_bringup infeed_line.launch.py'
+# open_panels <host|container> <workspace path on this side> - write the
+# config and start Terminator.
+open_panels() {
+    local mode=$1 ws=$2 config
+    PANE_LAUNCHER="bash $ws/scripts/launch/pane.sh $mode"
+    config=$(mktemp /tmp/workcell_terminator.XXXXXX)
+    write_terminator_config "$config" WorkcellLayout
+    echo "Launching Terminator with $config"
+    terminator -u -g "$config" -l WorkcellLayout &
 }
