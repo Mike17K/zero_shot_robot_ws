@@ -8,8 +8,9 @@
     place_nodes: ["2", "3", "4"]    # ConvaiorLeft / ConvaiorMiddle / ConvaiorRight
     place_order: "round_robin"      # or "random"
     home_node: "5"                  # InspectionPoint - idle pose
-    approach_distance: 0.10         # m, straight down before suction / up after
-    approach_speed: 0.05            # m/s
+    approach_max_distance: 0.30     # m, straight down until the force pad touches - at most this far
+    approach_speed: 0.03            # m/s (slow: the stop on contact is a trajectory cancel)
+    contact_force: 5.0              # N, force change on the gripper pad that counts as contact
     grasp_wait_sec: 3.0             # wall time for gripper_manager to report the grasp
     start_enabled: true
     go_home_on_start: true

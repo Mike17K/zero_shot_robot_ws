@@ -4,9 +4,12 @@
 Whenever a box waits at the infeed beam, the robot is idle and holds nothing:
 
   1. navigate to pick_node (above the beam)
-  2. straight down approach_distance
+  2. straight down (cartesian) until the gripper's force pad touches the box -
+     at most approach_max_distance; contact = the pad's force changing by
+     more than contact_force N (a guarded cartesian_move), so any box height
+     works
   3. suction on - and wait until gripper_manager reports the grasp
-  4. straight up approach_distance
+  4. straight up the approach distance (currently commented out in run_cycle)
   5. navigate to the next place node (place_nodes, round robin or random)
   6. suction off
   7. navigate back to home_node and wait for the next box
@@ -25,8 +28,9 @@ ROS interface (node /workcell_demo):
   ~/reset        std_srvs/Trigger   leave ERROR (after fixing the cause)
 
 A failed step puts the demo into ERROR and it stops commanding the robot -
-nothing is retried blindly. If the grasp fails, suction goes off, the tool
-backs out and returns home before stopping.
+nothing is retried blindly. If the pad touches nothing or the grasp fails,
+suction goes off, the tool backs out the way it came and returns home before
+stopping.
 """
 import random
 import threading
@@ -61,8 +65,9 @@ class PickPlaceDemo(Node):
         p('place_nodes', ['2', '3', '4'])
         p('place_order', 'round_robin')
         p('home_node', '5')
-        p('approach_distance', 0.10)
-        p('approach_speed', 0.05)
+        p('approach_max_distance', 0.30)
+        p('approach_speed', 0.03)
+        p('contact_force', 5.0)
         p('grasp_wait_sec', 3.0)
         p('start_enabled', True)
         p('go_home_on_start', True)
@@ -132,6 +137,19 @@ class PickPlaceDemo(Node):
         if not r.success:
             raise StepFailed(f'navigate to node {node} failed: {r.message}')
 
+    def _approach_until_contact(self, state: str) -> float:
+        """Straight down until the force pad touches; returns the distance travelled."""
+        d, force = float(self._p('approach_max_distance')), float(self._p('contact_force'))
+        self._set_state(state, f'approach: down until contact ({force:.0f} N, max {d * 100:.0f} cm)')
+        r = self.nav.cartesian((0.0, 0.0, -d), frame='world', speed=self._p('approach_speed'),
+                               stop_force=force)
+        if not r.contact:
+            if r.distance > 0.0:
+                self._straight(+r.distance, state, 'no contact - backing out')
+            raise StepFailed(f'approach: {r.message}')
+        self._set_state(state, f'approach: {r.message}')
+        return r.distance
+
     def _straight(self, dz: float, state: str, why: str) -> None:
         self._set_state(state, f'{why}: straight {"down" if dz < 0 else "up"} {abs(dz) * 100:.0f} cm')
         r = self.nav.cartesian((0.0, 0.0, dz), frame='world', speed=self._p('approach_speed'))
@@ -154,11 +172,10 @@ class PickPlaceDemo(Node):
         return []
 
     def run_cycle(self) -> None:
-        d = float(self._p('approach_distance'))
         pick, home = self._p('pick_node'), self._p('home_node')
 
         self._navigate(pick, self.PICKING, 'box at the beam')
-        self._straight(-d, self.PICKING, 'approach')
+        d = self._approach_until_contact(self.PICKING)
         self._gripper(True, self.PICKING)
         held = self._wait_for_grasp()
         if not held:
@@ -166,8 +183,8 @@ class PickPlaceDemo(Node):
             self.nav.gripper(False)
             self._straight(+d, self.PICKING, 'no grasp - backing out')
             self._navigate(home, self.RETURNING, 'no grasp')
-            raise StepFailed(f'no box grasped {d * 100:.0f} cm below node {pick} '
-                             f'(tool too high or too low for this box?)')
+            raise StepFailed(f'pad touched something {d * 100:.0f} cm below node {pick} '
+                             f'but no box was grasped (touched the belt, or the box is off-centre?)')
         # self._straight(+d, self.PICKING, f'lifting {", ".join(held)}')
 
         place = self.next_place_node()

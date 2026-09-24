@@ -3,9 +3,15 @@
 geometry_msgs/Vector3 offset   # meters
 string frame                   # "world" (default) or "tool" (gripper_tcp axes, +Z out of the cups)
 float64 speed                  # max tool speed, m/s; 0 = the server default
+float64 stop_force             # N; > 0 = guarded move: stop as soon as the gripper force pad
+                               # (/<robot>/gripper/wrench) reads this much more than at the start,
+                               # and succeed only if it did (offset = the furthest to search)
 ---
 bool success
 string message
 float64 fraction               # part of the line that could be followed (1.0 = all)
+bool contact                   # guarded move: stopped on contact
+float64 force                  # guarded move: force change at the stop, N
+float64 distance               # distance the tool actually travelled, m
 ---
 string status

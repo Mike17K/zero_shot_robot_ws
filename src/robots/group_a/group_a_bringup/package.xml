@@ -27,6 +27,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>gz_transport_vendor</exec_depend>
   <exec_depend>gz_msgs_vendor</exec_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>

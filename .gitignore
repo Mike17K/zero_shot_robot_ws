@@ -5,4 +5,4 @@ log/
 
 isaac_ros_assets/
 
-**/*.pyc
+**/__pycache__/

@@ -3,9 +3,12 @@
 
 Layout: a status strip on top (one coloured chip per subsystem: sim clock and
 real-time factor, robot joint states, cuMotion planner, navigator server,
-gripper, feeding line, box factory, demo), then the panels in a scroll area,
-re-flowing into 3 / 2 / 1 columns with the window width. Controls are sized
-for touch.
+gripper, feeding line, box factory, demo), always visible, then one tab per
+area - Robot (jog/gripper), Camera (live gripper-camera colour/depth feed,
+<namespace>/camera/color|depth from group_a_bringup's camera_bridge), Line &
+Belts (feeding line + conveyor speeds) and Boxes (factory + spawn). Panels in
+a tab re-flow into columns with the window width. Controls are sized for
+touch.
 
 Robot: hold-to-jog - press and hold a joint's -/+ button to move it at the
 selected speed (5-50% of its max velocity), release to stop. The joint
@@ -58,17 +61,18 @@ import sys
 import time
 from typing import Optional
 
+import numpy as np
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Duration
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from std_msgs.msg import Float64
 from std_srvs.srv import SetBool, Trigger
@@ -193,6 +197,21 @@ class TeleopNode(Node):
             self.create_subscription(GripperState, f'/{ns}/gripper/state',
                                      lambda msg, ns=ns: self.gripper_states.__setitem__(ns, msg), latched)
 
+        # Gripper camera (group_a_bringup's camera_bridge): only the latest
+        # frame is kept; the Camera tab converts it to a QImage on its own
+        # tick, and only while visible.
+        self.declare_parameter('camera_color_topic', 'camera/color')
+        self.declare_parameter('camera_depth_topic', 'camera/depth')
+        self.camera_frames: dict[tuple[str, str], Image] = {}
+        self.camera_stamps: dict[tuple[str, str], list[float]] = {}
+        camera_topics = {'color': self.get_parameter('camera_color_topic').value,
+                         'depth': self.get_parameter('camera_depth_topic').value}
+        for ns in self.robot_namespaces:
+            for kind, topic in camera_topics.items():
+                self.create_subscription(Image, f'/{ns}/{topic}',
+                                         lambda msg, key=(ns, kind): self._on_camera(key, msg),
+                                         qos_profile_sensor_data)
+
         # Workcell status strip: sim clock (real-time factor), demo state and
         # which servers exist (polled from the ROS graph, 1 Hz).
         self.sim_rtf: Optional[float] = None
@@ -217,6 +236,12 @@ class TeleopNode(Node):
     def _on_joint_state(self, ns: str, msg: JointState) -> None:
         self._joint_states[ns] = msg
         self.joint_state_stamp[ns] = time.monotonic()
+
+    def _on_camera(self, key: tuple[str, str], msg: Image) -> None:
+        self.camera_frames[key] = msg
+        stamps = self.camera_stamps.setdefault(key, [])
+        stamps.append(time.monotonic())
+        del stamps[:-20]  # last 20 arrivals, for the rate readout
 
     def _on_clock(self, msg: Clock) -> None:
         now = time.monotonic()
@@ -1100,6 +1125,97 @@ class ConveyorsPanel(QtWidgets.QGroupBox):
             layout.addWidget(row)
 
 
+def image_to_qimage(msg: Image, depth_range: tuple[float, float]) -> Optional[QtGui.QImage]:
+    """sensor_msgs/Image -> QImage (copied, owns its data). Depth (32FC1 metres
+    / 16UC1 millimetres) is shown as grey, near = bright, far = dark grey,
+    clipped to depth_range; invalid pixels (nan/inf/0) are black."""
+    w, h, enc = msg.width, msg.height, msg.encoding
+    if w == 0 or h == 0:
+        return None
+    if enc in ('rgb8', 'bgr8'):
+        img = QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_RGB888)
+        return img.rgbSwapped() if enc == 'bgr8' else img.copy()
+    if enc in ('rgba8', 'bgra8'):
+        img = QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_RGBA8888)
+        return img.rgbSwapped() if enc == 'bgra8' else img.copy()
+    if enc == 'mono8':
+        return QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_Grayscale8).copy()
+    if enc in ('32FC1', '16UC1'):
+        dtype, scale = (np.float32, 1.0) if enc == '32FC1' else (np.uint16, 1e-3)
+        depth = np.frombuffer(bytes(msg.data), dtype=dtype).reshape(h, msg.step // np.dtype(dtype).itemsize)[:, :w]
+        depth = depth.astype(np.float32) * scale
+        near, far = depth_range
+        valid = np.isfinite(depth) & (depth > 0.0)
+        grey = np.zeros((h, w), dtype=np.uint8)
+        # 255 (near) .. 40 (far), so black stays reserved for "no reading".
+        t = (np.clip(depth[valid], near, far) - near) / (far - near)
+        grey[valid] = (255.0 - 215.0 * t).astype(np.uint8)
+        return QtGui.QImage(grey.tobytes(), w, h, w, QtGui.QImage.Format_Grayscale8).copy()
+    return None
+
+
+class CameraPanel(QtWidgets.QWidget):
+    """Live gripper-camera feed (colour or depth) of one robot. Converts the
+    node's latest frame on its own timer, and only while it is on screen."""
+    STALE_SEC = 2.0
+    DEPTH_RANGE = (0.10, 3.0)  # Gazebo sensor clip planes (group_a_macro.xacro)
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__(parent)
+        self.node = node
+        self._shown_stamp = None
+
+        self.robot = QtWidgets.QComboBox()
+        self.robot.addItems(node.robot_namespaces)
+        self.robot.setVisible(len(node.robot_namespaces) > 1)
+        self.kind = QtWidgets.QComboBox()
+        self.kind.addItems(['color', 'depth'])
+        self.info = QtWidgets.QLabel('-')
+        bar = QtWidgets.QHBoxLayout()
+        bar.addWidget(self.robot)
+        bar.addWidget(self.kind)
+        bar.addWidget(self.info, 1)
+
+        self.view = QtWidgets.QLabel('waiting for camera...')
+        self.view.setAlignment(QtCore.Qt.AlignCenter)
+        self.view.setMinimumSize(320, 240)
+        self.view.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+        self.view.setStyleSheet('background-color: black; color: #bdbdbd;')
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(bar)
+        layout.addWidget(self.view, 1)
+
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(100)  # the Gazebo camera publishes at 10 Hz
+
+    def refresh(self) -> None:
+        if not self.isVisible():
+            return
+        key = (self.robot.currentText(), self.kind.currentText())
+        topic = f'/{key[0]}/camera/{key[1]}'
+        stamps = self.node.camera_stamps.get(key, [])
+        if not stamps or time.monotonic() - stamps[-1] > self.STALE_SEC:
+            self.view.setText(f'no images on {topic}')
+            self.info.setText(topic)
+            self._shown_stamp = None
+            return
+        msg = self.node.camera_frames[key]
+        stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        if stamp == self._shown_stamp:
+            return
+        img = image_to_qimage(msg, self.DEPTH_RANGE)
+        if img is None:
+            self.view.setText(f'unsupported encoding {msg.encoding!r} on {topic}')
+            return
+        self._shown_stamp = stamp
+        self.view.setPixmap(QtGui.QPixmap.fromImage(img).scaled(
+            self.view.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        rate = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 and stamps[-1] > stamps[0] else 0.0
+        self.info.setText(f'{topic}  {msg.width}x{msg.height} {msg.encoding}  {rate:.1f} Hz')
+
+
 APP_STYLE = """
 QWidget { font-size: 11pt; }
 QGroupBox { font-weight: bold; border: 1px solid #9e9e9e; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
@@ -1122,23 +1238,25 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         self._robot_panels = [RobotPanel(node, ns) for ns in node.robot_namespaces]
         self._line_panel = InfeedLinePanel(node)
         self._factory_panel = FactoryPanel(node.configure_factory)
-        panels = [*self._robot_panels, self._line_panel, self._factory_panel,
-                  ConveyorsPanel(node, self._on_conveyor_changed),
-                  SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z)]
 
+        # Status strip on top (always visible), one tab per area below it.
         self._banner = StatusBanner(node)
-        body = ResponsiveColumns(panels)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll.setWidget(body)
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            self._robot_panels, max_columns=max(1, len(self._robot_panels)))), 'Robot')
+        self.tabs.addTab(CameraPanel(node), 'Camera')
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            [self._line_panel, ConveyorsPanel(node, self._on_conveyor_changed)], max_columns=2)), 'Line && Belts')
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            [self._factory_panel, SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z)],
+            max_columns=2)), 'Boxes')
 
         central = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(central)
         outer.setContentsMargins(6, 6, 6, 6)
         outer.addWidget(self._banner)
-        outer.addWidget(scroll, 1)
+        outer.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
         # ROS spins in the Qt thread: drain every ready callback each tick
@@ -1150,6 +1268,14 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         self._graph_timer.timeout.connect(self.node.poll_graph)
         self._graph_timer.start(1000)
         self.node.poll_graph()
+
+    @staticmethod
+    def _scrolled(widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
 
     def _on_ros_tick(self) -> None:
         for _ in range(50):

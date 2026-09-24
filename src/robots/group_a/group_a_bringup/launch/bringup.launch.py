@@ -338,6 +338,19 @@ def launch_setup(context):
         condition=IfCondition(LaunchConfiguration("sim_gazebo")),
     )
 
+    # ── 8. Gripper force pad ─────────────────────────────────────────────────
+    # Re-stamps the bridged force_torque sensor (gripper/force_torque_raw) as
+    # gripper/wrench in the pad's frame and derives gripper/contact - see
+    # scripts/force_sensor.py.
+    force_sensor_node = Node(
+        package="group_a_bringup",
+        executable="force_sensor.py",
+        output="screen",
+        namespace=namespace,
+        parameters=[sim_time_param],
+        condition=IfCondition(LaunchConfiguration("sim_gazebo")),
+    )
+
     return [
         robot_state_publisher,
         controller_manager_node,
@@ -346,6 +359,7 @@ def launch_setup(context):
         depth_to_pointcloud_container,
         move_group_node,
         gripper_manager_node,
+        force_sensor_node,
         TimerAction(
             period=4.0,
             actions=[motion_default_active_controllers_spawner],
