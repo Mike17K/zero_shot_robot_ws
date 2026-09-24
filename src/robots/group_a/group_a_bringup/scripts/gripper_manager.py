@@ -29,7 +29,13 @@ is captured (several at once is fine); OFF releases all. In the gripper TCP
 frame (+Z = direction the cups point) an object qualifies when
 
     -suction_back_tol <= z <= suction_reach + (object half-height)
-    |x| <= suction_half_width,  |y| <= suction_half_length
+    |x - cx| <= half_width + suction_margin,  |y - cy| <= half_length + suction_margin
+
+The footprint (cx, cy, half_width, half_length) is the gripper's contact
+surface itself - suction_link's (gripper_force_sensor_link) collision box,
+read from robot_description and placed with TF - so it always matches the
+URDF. suction_half_width/length > 0 override it. It is published as an RViz
+marker on gripper/suction_zone (green = suction on).
 
 Poses come from /world/<world>/dynamic_pose/info (non-static entities only),
 subscribed to NATIVELY via gz-transport. It can't go through ros_gz_bridge:
@@ -55,12 +61,15 @@ ROS interface (namespaced per robot):
 """
 import math
 import threading
+import xml.etree.ElementTree as ET
 
 import rclpy
 import tf2_ros
 from rclpy.node import Node
 from rclpy.time import Time
+from std_msgs.msg import String
 from std_srvs.srv import SetBool
+from visualization_msgs.msg import Marker
 
 from gz.transport13 import Node as GzNode
 from gz.msgs10.boolean_pb2 import Boolean
@@ -130,6 +139,12 @@ def _box_sdf(model_name: str, link_name: str, w: float, d: float, h: float,
     )
 
 
+def _quat_rotate(q, v):
+    """Rotate vector v by unit quaternion q (x, y, z, w)."""
+    x, y, z, w = q
+    return _quat_conj_rotate((-x, -y, -z, w), v)
+
+
 def _quat_conj_rotate(q, v):
     """Rotate v by the INVERSE of quaternion q=(x,y,z,w), i.e. express a
     world-frame vector in the frame q describes."""
@@ -158,8 +173,12 @@ class GripperManager(Node):
         self.declare_parameter('gripper_parent_link', 'gp_link_6')
         self.declare_parameter('gripper_frame', 'gripper_tcp')
         self.declare_parameter('world_frame', 'world')
-        self.declare_parameter('suction_half_width', 0.17)
-        self.declare_parameter('suction_half_length', 0.22)
+        # Footprint = this link's collision box (the gripper's contact
+        # surface, group_a_macro.xacro). half_width/length > 0 override it.
+        self.declare_parameter('suction_link', 'gripper_force_sensor_link')
+        self.declare_parameter('suction_half_width', 0.0)
+        self.declare_parameter('suction_half_length', 0.0)
+        self.declare_parameter('suction_margin', 0.0)
         self.declare_parameter('suction_reach', 0.01)
         self.declare_parameter('suction_back_tol', 0.02)
         # Used for objects this node did not spawn (size unknown). The zone test
@@ -179,8 +198,14 @@ class GripperManager(Node):
         self.parent_link = self.get_parameter('gripper_parent_link').value
         self.gripper_frame = self.get_parameter('gripper_frame').value
         self.world_frame = self.get_parameter('world_frame').value
-        self.half_width = float(self.get_parameter('suction_half_width').value)
-        self.half_length = float(self.get_parameter('suction_half_length').value)
+        self.suction_link = self.get_parameter('suction_link').value
+        self.half_width_override = float(self.get_parameter('suction_half_width').value)
+        self.half_length_override = float(self.get_parameter('suction_half_length').value)
+        self.margin = float(self.get_parameter('suction_margin').value)
+        # Footprint in the TCP frame: (cx, cy, half_width, half_length), None
+        # until robot_description + TF give it (no grasping before that).
+        self._link_box = None     # (center xyz in suction_link, size xyz) from the URDF
+        self._footprint = None
         self.reach = float(self.get_parameter('suction_reach').value)
         self.back_tol = float(self.get_parameter('suction_back_tol').value)
         self.unknown_half_h = float(self.get_parameter('unknown_object_half_height').value)
@@ -230,13 +255,16 @@ class GripperManager(Node):
         self.create_service(SpawnBox, 'gripper/spawn_box', self._on_spawn_box)
         for topic in self.get_parameter('spawned_box_topics').value:
             self.create_subscription(SpawnedBox, topic, self._on_spawned_box, 50)
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(String, 'robot_description', self._on_robot_description, latched)
+        self._zone_pub = self.create_publisher(Marker, 'gripper/suction_zone', latched)
         self._timer = self.create_timer(1.0 / max(1.0, update_rate), self._on_timer)
+        self.create_timer(1.0, self._update_footprint)
 
         self.get_logger().info(
             f'gripper_manager ready: world={self.world_name!r} robot={self.robot_model_name!r} '
-            f'parent_link={self.parent_link!r} footprint='
-            f'{2 * self.half_width:.2f}x{2 * self.half_length:.2f}m reach={self.reach:.2f}m '
-            f'prefixes={list(self.graspable_prefixes)}')
+            f'parent_link={self.parent_link!r} footprint from {self.suction_link!r} '
+            f'reach={self.reach:.2f}m prefixes={list(self.graspable_prefixes)}')
 
     def _on_spawned_box(self, msg: SpawnedBox) -> None:
         self._object_half_height[msg.name] = msg.size.z / 2.0
@@ -263,6 +291,65 @@ class GripperManager(Node):
             if robot_id:
                 self._robot_entity_id = robot_id
 
+    # ── Suction footprint (from the URDF) ───────────────────────────────────
+
+    def _on_robot_description(self, msg: String) -> None:
+        try:
+            link = ET.fromstring(msg.data).find(f"link[@name='{self.suction_link}']")
+            box = link.find('collision/geometry/box') if link is not None else None
+            if box is None:
+                self.get_logger().error(f'robot_description: no collision box on {self.suction_link!r}')
+                return
+            origin = link.find('collision/origin')
+            xyz = tuple(float(v) for v in (origin.get('xyz', '0 0 0') if origin is not None
+                                           else '0 0 0').split())
+            self._link_box = (xyz, tuple(float(v) for v in box.get('size').split()))
+            self._footprint = None
+            self._update_footprint()
+        except ET.ParseError as exc:
+            self.get_logger().error(f'robot_description: {exc}')
+
+    def _update_footprint(self) -> None:
+        """Place suction_link's box in the TCP frame (static, so once is
+        enough) and publish it as the suction zone marker."""
+        if self._footprint is not None or self._link_box is None:
+            return
+        try:
+            t = self._tf_buffer.lookup_transform(self.gripper_frame, self.suction_link, Time())
+        except tf2_ros.TransformException:
+            return  # retried every second
+        center, size = self._link_box
+        q = t.transform.rotation
+        off = _quat_rotate((q.x, q.y, q.z, q.w), center)
+        tr = t.transform.translation
+        cx, cy = tr.x + off[0], tr.y + off[1]
+        # Box axes in the TCP frame: the pad is mounted parallel to the TCP
+        # (group_a_macro.xacro), so its x/y sizes map straight across.
+        hw = self.half_width_override if self.half_width_override > 0.0 else size[0] / 2.0
+        hl = self.half_length_override if self.half_length_override > 0.0 else size[1] / 2.0
+        self._footprint = (cx, cy, hw, hl)
+        self.get_logger().info(
+            f'suction footprint: {2 * hw:.3f} x {2 * hl:.3f} m centred at ({cx:+.3f}, {cy:+.3f}) '
+            f'in {self.gripper_frame} (from {self.suction_link}), margin {self.margin:.3f} m')
+        self._publish_zone()
+
+    def _publish_zone(self) -> None:
+        if self._footprint is None:
+            return
+        cx, cy, hw, hl = self._footprint
+        m = Marker()
+        m.header.frame_id = self.gripper_frame
+        m.ns, m.id, m.type, m.action = 'suction_zone', 0, Marker.CUBE, Marker.ADD
+        m.pose.position.x, m.pose.position.y = cx, cy
+        m.pose.position.z = (self.reach - self.back_tol) / 2.0
+        m.pose.orientation.w = 1.0
+        m.scale.x, m.scale.y = 2.0 * (hw + self.margin), 2.0 * (hl + self.margin)
+        m.scale.z = self.reach + self.back_tol
+        m.color.r, m.color.g, m.color.b = (0.1, 0.9, 0.2) if self._suction_on else (0.6, 0.6, 0.6)
+        m.color.a = 0.4
+        m.frame_locked = True
+        self._zone_pub.publish(m)
+
     # ── Geometry ────────────────────────────────────────────────────────────
 
     def _tcp_pose(self):
@@ -280,15 +367,20 @@ class GripperManager(Node):
         return _quat_conj_rotate(q, (obj_pos[0] - tx, obj_pos[1] - ty, obj_pos[2] - tz))
 
     def _in_suction_zone(self, local, model_name: str) -> bool:
+        cx, cy, hw, hl = self._footprint
         half_h = self._object_half_height.get(model_name, self.unknown_half_h)
-        return (abs(local[0]) <= self.half_width
-                and abs(local[1]) <= self.half_length
+        return (abs(local[0] - cx) <= hw + self.margin
+                and abs(local[1] - cy) <= hl + self.margin
                 and -self.back_tol <= local[2] <= self.reach + half_h)
 
     # ── Grasp control loop ──────────────────────────────────────────────────
 
     def _on_timer(self) -> None:
         if not self._suction_on:
+            return
+        if self._footprint is None:
+            self.get_logger().warn(f'suction on, but no footprint yet (robot_description / TF '
+                                   f'for {self.suction_link!r})', throttle_duration_sec=5.0)
             return
         tcp = self._tcp_pose()
         if tcp is None:
@@ -369,6 +461,7 @@ class GripperManager(Node):
     def _on_set_suction(self, request, response):
         self._suction_on = bool(request.data)
         self._publish_state()
+        self._publish_zone()  # marker colour follows suction on/off
         if self._suction_on:
             response.success = True
             response.message = 'suction ON - capturing objects in the gripper footprint'

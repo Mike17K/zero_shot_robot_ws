@@ -9,7 +9,7 @@ Whenever a box waits at the infeed beam, the robot is idle and holds nothing:
      more than contact_force N (a guarded cartesian_move), so any box height
      works
   3. suction on - and wait until gripper_manager reports the grasp
-  4. straight up the approach distance (currently commented out in run_cycle)
+  4. straight up (cartesian) lift_distance with the box
   5. navigate to the next place node (place_nodes, round robin or random)
   6. suction off
   7. navigate back to home_node and wait for the next box
@@ -26,6 +26,9 @@ ROS interface (node /workcell_demo):
   ~/state        std_msgs/String, latched: "<STATE> | <detail>"
   ~/set_enabled  std_srvs/SetBool   run / pause (a running cycle finishes first)
   ~/reset        std_srvs/Trigger   leave ERROR (after fixing the cause)
+  ~/restart      std_srvs/Trigger   start over from any state: abort the running
+                                    cycle at its next step, suction off (drops
+                                    anything held), go home, clear ERROR, enable
 
 A failed step puts the demo into ERROR and it stops commanding the robot -
 nothing is retried blindly. If the pad touches nothing or the grasp fails,
@@ -51,6 +54,10 @@ class StepFailed(Exception):
     pass
 
 
+class RestartRequested(Exception):
+    """Raised between steps once ~/restart was called."""
+
+
 class PickPlaceDemo(Node):
     # States shown on ~/state
     STARTING, DISABLED, WAITING, PICKING, PLACING, RETURNING, ERROR = (
@@ -66,8 +73,10 @@ class PickPlaceDemo(Node):
         p('place_order', 'round_robin')
         p('home_node', '5')
         p('approach_max_distance', 0.30)
-        p('approach_speed', 0.03)
+        p('approach_speed', 0.015)
         p('contact_force', 5.0)
+        p('lift_distance', 0.30)
+        p('lift_speed', 0.05)
         p('grasp_wait_sec', 3.0)
         p('start_enabled', True)
         p('go_home_on_start', True)
@@ -80,6 +89,8 @@ class PickPlaceDemo(Node):
         self._state_pub = self.create_publisher(String, '~/state', latched)
         self.create_service(SetBool, '~/set_enabled', self._on_set_enabled)
         self.create_service(Trigger, '~/reset', self._on_reset)
+        self.create_service(Trigger, '~/restart', self._on_restart)
+        self._restart = threading.Event()
 
         self._enabled = bool(self._p('start_enabled'))
         self._error = False
@@ -109,6 +120,35 @@ class PickPlaceDemo(Node):
         self._error = False
         return response
 
+    def _on_restart(self, request, response):
+        self._restart.set()
+        response.success = True
+        response.message = ('restart requested - the running step finishes, then suction off, '
+                            'home, and the demo runs again')
+        self.get_logger().info(response.message)
+        return response
+
+    def _check_restart(self) -> None:
+        if self._restart.is_set():
+            raise RestartRequested()
+
+    def _do_restart(self) -> None:
+        """Suction off, home, clear ERROR, enable. A failure here is an ERROR again."""
+        self._restart.clear()
+        self._error = False
+        self._enabled = True
+        self._set_state(self.RETURNING, 'restart: suction off')
+        self.nav.gripper(False)
+        try:
+            self._navigate(self._p('home_node'), self.RETURNING, 'restart')
+        except (StepFailed, RestartRequested) as exc:
+            if isinstance(exc, RestartRequested):
+                return self._do_restart()
+            self._error = True
+            self._set_state(self.ERROR, f'restart: {exc} - fix it, then call ~/restart')
+            return
+        self._set_state(self.WAITING, 'restarted')
+
     def _set_state(self, state: str, detail: str = '') -> None:
         text = f'{state} | {detail}' if detail else state
         if text != self._state:
@@ -132,6 +172,7 @@ class PickPlaceDemo(Node):
     # ── Steps ───────────────────────────────────────────────────────────────
 
     def _navigate(self, node: str, state: str, why: str) -> None:
+        self._check_restart()
         self._set_state(state, f'{why}: navigating to node {node}')
         r = self.nav.navigate(node)
         if not r.success:
@@ -139,6 +180,7 @@ class PickPlaceDemo(Node):
 
     def _approach_until_contact(self, state: str) -> float:
         """Straight down until the force pad touches; returns the distance travelled."""
+        self._check_restart()
         d, force = float(self._p('approach_max_distance')), float(self._p('contact_force'))
         self._set_state(state, f'approach: down until contact ({force:.0f} N, max {d * 100:.0f} cm)')
         r = self.nav.cartesian((0.0, 0.0, -d), frame='world', speed=self._p('approach_speed'),
@@ -150,13 +192,16 @@ class PickPlaceDemo(Node):
         self._set_state(state, f'approach: {r.message}')
         return r.distance
 
-    def _straight(self, dz: float, state: str, why: str) -> None:
+    def _straight(self, dz: float, state: str, why: str, speed: float = None) -> None:
+        self._check_restart()
         self._set_state(state, f'{why}: straight {"down" if dz < 0 else "up"} {abs(dz) * 100:.0f} cm')
-        r = self.nav.cartesian((0.0, 0.0, dz), frame='world', speed=self._p('approach_speed'))
+        r = self.nav.cartesian((0.0, 0.0, dz), frame='world',
+                               speed=self._p('approach_speed') if speed is None else speed)
         if not r.success:
             raise StepFailed(f'cartesian move {dz:+.2f} m failed: {r.message}')
 
     def _gripper(self, on: bool, state: str) -> None:
+        self._check_restart()
         self._set_state(state, f'suction {"on" if on else "off"}')
         r = self.nav.gripper(on)
         if not r.success:
@@ -165,6 +210,7 @@ class PickPlaceDemo(Node):
     def _wait_for_grasp(self) -> list:
         deadline = time.monotonic() + self._p('grasp_wait_sec')
         while time.monotonic() < deadline:
+            self._check_restart()
             held = self.nav.holding()
             if held:
                 return held
@@ -185,7 +231,8 @@ class PickPlaceDemo(Node):
             self._navigate(home, self.RETURNING, 'no grasp')
             raise StepFailed(f'pad touched something {d * 100:.0f} cm below node {pick} '
                              f'but no box was grasped (touched the belt, or the box is off-centre?)')
-        # self._straight(+d, self.PICKING, f'lifting {", ".join(held)}')
+        self._straight(+float(self._p('lift_distance')), self.PICKING, f'lifting {", ".join(held)}',
+                       speed=float(self._p('lift_speed')))
 
         place = self.next_place_node()
         self._navigate(place, self.PLACING, f'carrying {", ".join(held)}')
@@ -207,6 +254,9 @@ class PickPlaceDemo(Node):
                 self._set_state(self.ERROR, str(exc))
 
         while rclpy.ok():
+            if self._restart.is_set():
+                self._do_restart()
+                continue
             if self._error:
                 time.sleep(0.2)  # keep the ERROR state until ~/reset
                 continue
@@ -222,6 +272,8 @@ class PickPlaceDemo(Node):
                 try:
                     self.run_cycle()
                     self._set_state(self.WAITING, f'cycle {self.cycles} done')
+                except RestartRequested:
+                    pass  # handled at the top of the loop
                 except StepFailed as exc:
                     self._error = True
                     self._set_state(self.ERROR, f'{exc} - fix it, then call ~/reset')

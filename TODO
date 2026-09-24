@@ -1,2 +1,169 @@
-- we need a force sensor at the robots gripper ( shape as a rect that covers all the surface ) and also the data in ros2 proper topic
-- we need the grasping to be done cartisian until sensor sees contact in the demo then do the rest of movements
+
+Here's the setup, end to end — sim side, ML side, and the glue between them.
+
+## 1. Prerequisites
+
+- `gz sim` (Harmonic or newer) + ROS 2 (Jazzy/Humble) with `ros_gz_bridge`, which you should already have from the suction gripper setup.
+- Python 3.10+, and a GPU is strongly recommended (SAM is not cheap to run on CPU).
+- A Python virtual environment, kept separate from your ROS 2 install's system Python to avoid dependency conflicts.
+
+## 2. Python environment
+
+```bash
+python3 -m venv ~/venvs/zeroshot-pose
+source ~/venvs/zeroshot-pose/bin/activate
+
+pip install numpy opencv-python open3d matplotlib
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # match your CUDA version
+pip install git+https://github.com/facebookresearch/segment-anything.git
+```
+
+For real-time-ish performance in a project setting, swap full SAM for **MobileSAM** — same interface, a fraction of the compute, and it's exactly the kind of lighter segmentor SAM-6D itself supports swapping in (they mention FastSAM as a drop-in option for speed).
+
+```bash
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+```
+
+Download a checkpoint:
+```bash
+mkdir -p ~/models/sam
+wget -O ~/models/sam/mobile_sam.pt \
+  https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt
+```
+
+## 3. Add an RGB-D camera to your `gz sim` world
+
+Mount it overhead of the pallet (or on the wrist, per your earlier pipeline design). `gz sim` has a native `rgbd_camera` sensor type:
+
+```xml
+<link name="pallet_cam_link">
+  <sensor name="rgbd_camera" type="rgbd_camera">
+    <update_rate>10</update_rate>
+    <camera>
+      <horizontal_fov>1.047</horizontal_fov>
+      <image>
+        <width>640</width>
+        <height>480</height>
+      </image>
+      <clip>
+        <near>0.1</near>
+        <far>5.0</far>
+      </clip>
+    </camera>
+    <always_on>true</always_on>
+    <visualize>true</visualize>
+  </sensor>
+</link>
+```
+
+Once the sim is running (and unpaused — `gz sim` won't publish images while paused), confirm the topics exist:
+```bash
+gz topic -l | grep camera
+# /pallet_cam/image
+# /pallet_cam/depth_image
+# /pallet_cam/camera_info
+```
+
+## 4. Bridge camera topics into ROS 2
+
+```bash
+ros2 run ros_gz_bridge parameter_bridge \
+  /pallet_cam/image@sensor_msgs/msg/Image@gz.msgs.Image \
+  /pallet_cam/depth_image@sensor_msgs/msg/Image@gz.msgs.Image \
+  /pallet_cam/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo \
+  --ros-args -p override_frame_id:=pallet_cam_optical_frame
+```
+
+The `override_frame_id` matters here: ROS images are expected in a z-forward optical frame, while Gazebo's native frame isn't — skipping this causes silently wrong 3D reprojection later, which is a nasty bug to chase.
+
+Sanity check with `rqt_image_view /pallet_cam/image` before writing any code — confirm you're actually seeing boxes on the pallet from the sim.
+
+## 5. The perception node
+
+This is a single ROS 2 node: subscribe to RGB + depth + camera_info, run MobileSAM for masks, lift each mask to a point cloud, fit plane + oriented box.
+
+```python
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, CameraInfo
+from cv_bridge import CvBridge
+import numpy as np, cv2, open3d as o3d, torch
+from mobile_sam import sam_model_registry, SamAutomaticMaskGenerator
+
+class BoxPoseEstimator(Node):
+    def __init__(self):
+        super().__init__('box_pose_estimator')
+        self.bridge = CvBridge()
+        self.K = None  # camera intrinsics, filled from CameraInfo
+
+        sam = sam_model_registry["vit_t"](checkpoint="~/models/sam/mobile_sam.pt")
+        sam.to("cuda").eval()
+        self.mask_gen = SamAutomaticMaskGenerator(
+            sam, points_per_side=16, pred_iou_thresh=0.9)  # fewer proposals: scene is just boxes
+
+        self.create_subscription(CameraInfo, '/pallet_cam/camera_info', self.info_cb, 1)
+        self.create_subscription(Image, '/pallet_cam/image', self.rgb_cb, 1)
+        self.latest_depth = None
+        self.create_subscription(Image, '/pallet_cam/depth_image', self.depth_cb, 1)
+
+    def info_cb(self, msg):
+        self.K = np.array(msg.k).reshape(3, 3)
+
+    def depth_cb(self, msg):
+        self.latest_depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+
+    def rgb_cb(self, msg):
+        if self.K is None or self.latest_depth is None:
+            return
+        rgb = self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8')
+        masks = self.mask_gen.generate(rgb)
+
+        for m in masks:
+            if m['area'] < 500:            # drop tiny/noisy proposals
+                continue
+            pose = self.mask_to_pose(m['segmentation'], self.latest_depth)
+            if pose is not None:
+                centroid, R, extent = pose
+                self.get_logger().info(f"box pose: {centroid}, size~{extent}")
+                # -> hand this off to your grasp-point / motion planning stage
+
+    def mask_to_pose(self, mask, depth):
+        ys, xs = np.where(mask)
+        zs = depth[ys, xs]
+        valid = (zs > 0.05) & (zs < 5.0)
+        if valid.sum() < 50:
+            return None
+        fx, fy, cx, cy = self.K[0,0], self.K[1,1], self.K[0,2], self.K[1,2]
+        xs, ys, zs = xs[valid], ys[valid], zs[valid]
+        X = (xs - cx) * zs / fx
+        Y = (ys - cy) * zs / fy
+        pts = np.stack([X, Y, zs], axis=1)
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pts)
+        plane_model, inliers = pcd.segment_plane(0.005, 3, 200)
+        if len(inliers) < 30:
+            return None
+        top = pcd.select_by_index(inliers)
+        obb = top.get_minimal_oriented_bounding_box()
+        return obb.center, obb.R, obb.extent
+
+def main():
+    rclpy.init()
+    rclpy.spin(BoxPoseEstimator())
+
+if __name__ == '__main__':
+    main()
+```
+
+## 6. Verify before trusting it
+
+- Log each estimated `centroid`/`extent` next to the known ground-truth box pose from your `gz sim` domain-randomization script (you have this, since you spawned the boxes) and check the error — this is your accuracy baseline before anything touches the real robot.
+- Overlay the fitted oriented box back onto the RGB frame (project `obb` corners with the same intrinsics) as a quick visual sanity check — catches axis-swap and frame-convention bugs immediately, which are the most common failure mode here.
+- Watch for two failure patterns specifically: masks that span two adjacent touching boxes (SAM under-segmenting clutter), and plane fits that grab a side face instead of the top (happens with steep camera angles) — both are worth building test cases for once you get to the held-out generalization stage.
+
+## 7. Feeding this forward
+
+The `centroid, R` you get out is the box pose in the camera's optical frame — transform it into the robot base frame using your camera's extrinsic calibration (a fixed static transform if the camera's mounted rigidly), and that's the pose you feed into the grasp-point computation step from the pipeline: normal from `R`'s third column gives your suction approach vector, centroid gives your target position.
+
+Want me to go over the extrinsic calibration step next, or the grasp-point/approach-vector code that consumes this pose?

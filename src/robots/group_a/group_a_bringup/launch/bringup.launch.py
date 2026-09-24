@@ -24,11 +24,12 @@ def get_launch_arguments() -> list[DeclareLaunchArgument]:
     args.append(DeclareLaunchArgument("rpy", default_value="0.0 0.0 0.0", description="Robot spawn orientation"))
     args.append(DeclareLaunchArgument("namespace", default_value="", description="Namespace for this robot's nodes and topics, including its own /<namespace>/tf"))
     # Suction footprint, in the gripper TCP frame - what gripper_manager.py
-    # counts as "in front of the plate and close enough to suck up". Defaults
-    # cover the 0.30x0.40m plate (group_a_macro.xacro) plus a small margin.
+    # counts as "in front of the plate and close enough to suck up". By
+    # default (0.0) it is the force pad's collision box from the URDF
+    # (group_a_macro.xacro), so it always matches the gripper; > 0 overrides.
     # Nothing here caps HOW MANY objects can be grasped or spawned.
-    args.append(DeclareLaunchArgument("suction_half_width", default_value="0.17", description="Half-width (X) of the suction footprint in the gripper TCP frame, meters"))
-    args.append(DeclareLaunchArgument("suction_half_length", default_value="0.22", description="Half-length (Y) of the suction footprint in the gripper TCP frame, meters"))
+    args.append(DeclareLaunchArgument("suction_half_width", default_value="0.0", description="Half-width (X) of the suction footprint in the gripper TCP frame, meters; 0 = from the URDF's gripper_force_sensor_link box"))
+    args.append(DeclareLaunchArgument("suction_half_length", default_value="0.0", description="Half-length (Y) of the suction footprint in the gripper TCP frame, meters; 0 = from the URDF's gripper_force_sensor_link box"))
     args.append(DeclareLaunchArgument("suction_reach", default_value="0.01", description="How far in front of the cup tips (gripper_tcp, +Z) an object surface can be and still be sucked up, meters - small, so the cups must nearly touch the box"))
     args.append(DeclareLaunchArgument("graspable_prefixes", default_value="['box']", description="YAML list of model-name prefixes gripper_manager treats as graspable - keeps the arm's own links and the conveyor rollers out of consideration"))
     args.append(DeclareLaunchArgument("world_name", default_value="default", description="Gazebo world name (see workcell_description/worlds/workcell_world.sdf's <world name=...>) - used by gripper_manager's spawn_box for the /world/<name>/create and /world/<name>/remove services"))

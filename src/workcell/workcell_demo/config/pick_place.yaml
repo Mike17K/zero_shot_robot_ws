@@ -9,8 +9,10 @@
     place_order: "round_robin"      # or "random"
     home_node: "5"                  # InspectionPoint - idle pose
     approach_max_distance: 0.30     # m, straight down until the force pad touches - at most this far
-    approach_speed: 0.03            # m/s (slow: the stop on contact is a trajectory cancel)
+    approach_speed: 0.015           # m/s, guarded move down to the box (slow: the stop on contact is a trajectory cancel)
     contact_force: 5.0              # N, force change on the gripper pad that counts as contact
+    lift_distance: 0.30             # m, straight up with the box after the grasp
+    lift_speed: 0.05                # m/s
     grasp_wait_sec: 3.0             # wall time for gripper_manager to report the grasp
     start_enabled: true
     go_home_on_start: true

@@ -4,7 +4,7 @@
 Layout: a status strip on top (one coloured chip per subsystem: sim clock and
 real-time factor, robot joint states, cuMotion planner, navigator server,
 gripper, feeding line, box factory, demo), always visible, then one tab per
-area - Robot (jog/gripper), Camera (live gripper-camera colour/depth feed,
+area - Robot (jog/gripper, demo run/pause/restart), Camera (live gripper-camera colour/depth feed,
 <namespace>/camera/color|depth from group_a_bringup's camera_bridge), Line &
 Belts (feeding line + conveyor speeds) and Boxes (factory + spawn). Panels in
 a tab re-flow into columns with the window width. Controls are sized for
@@ -232,6 +232,9 @@ class TeleopNode(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._line_enable_client = self.create_client(SetBool, f'/{line_ns}/line/set_enabled')
         self._line_release_client = self.create_client(Trigger, f'/{line_ns}/line/release')
+        # Pick & place demo (workcell_demo) controls.
+        self._demo_enable_client = self.create_client(SetBool, '/workcell_demo/set_enabled')
+        self._demo_restart_client = self.create_client(Trigger, '/workcell_demo/restart')
 
     def _on_joint_state(self, ns: str, msg: JointState) -> None:
         self._joint_states[ns] = msg
@@ -273,7 +276,7 @@ class TeleopNode(Node):
         """Non-blocking service call; on_done(ok, message) runs from the ROS
         spin in the Qt thread."""
         if not client.service_is_ready():
-            on_done(False, f'{client.srv_name} unavailable (infeed_line.launch.py not running?)')
+            on_done(False, f'{client.srv_name} unavailable (is its node running?)')
             return
 
         def _done(fut):
@@ -290,6 +293,12 @@ class TeleopNode(Node):
 
     def release_line(self, on_done) -> None:
         self._call_async(self._line_release_client, Trigger.Request(), on_done)
+
+    def set_demo_enabled(self, enabled: bool, on_done) -> None:
+        self._call_async(self._demo_enable_client, SetBool.Request(data=bool(enabled)), on_done)
+
+    def restart_demo(self, on_done) -> None:
+        self._call_async(self._demo_restart_client, Trigger.Request(), on_done)
 
     def current_joint_positions(self, robot_ns: str) -> Optional[list[float]]:
         """The robot's actual joint positions in robot_joint_names order, or
@@ -923,6 +932,64 @@ class InfeedLinePanel(QtWidgets.QGroupBox):
         self.node.release_line(self._report)
 
 
+class DemoPanel(QtWidgets.QGroupBox):
+    """Pick & place demo (workcell_demo): its live ~/state, run/pause, and
+    Restart - abort the running cycle, suction off, go home, clear any ERROR
+    and run again (the demo's ~/restart service)."""
+    _LEVELS = {'ERROR': 'bad', 'WAITING': 'ok', 'DISABLED': 'off', 'STARTING': 'warn'}
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__('Pick & Place Demo', parent)
+        self.node = node
+        self.state_label = QtWidgets.QLabel()
+        self.state_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.detail_label = QtWidgets.QLabel()
+        self.detail_label.setWordWrap(True)
+        self.run_btn = QtWidgets.QPushButton('Pause')
+        self.run_btn.setToolTip('Pause / run the demo (a running cycle finishes first)')
+        self.run_btn.clicked.connect(self._on_run_clicked)
+        self.restart_btn = QtWidgets.QPushButton('Restart')
+        self.restart_btn.setToolTip('Abort the running cycle, suction off, go home, clear ERROR and run again')
+        self.restart_btn.clicked.connect(self._on_restart_clicked)
+        self.status_label = QtWidgets.QLabel('')
+        self.status_label.setWordWrap(True)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.run_btn)
+        buttons.addWidget(self.restart_btn)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.state_label)
+        layout.addWidget(self.detail_label)
+        layout.addLayout(buttons)
+        layout.addWidget(self.status_label)
+        self.refresh()
+
+    def refresh(self) -> None:
+        up = self.node.has_service('/workcell_demo/restart')
+        text = self.node.demo_state if up else None
+        state, _, detail = (text or '').partition('|')
+        state = state.strip()
+        if not up:
+            state, detail = 'NOT RUNNING', 'start it: ros2 launch workcell_demo demo.launch.py'
+        level = self._LEVELS.get(state, 'busy') if up else 'off'
+        self.state_label.setText(f'<b>{state or "?"}</b>')
+        self.state_label.setStyleSheet(f'background-color: {STATUS_COLORS[level]}; color: white; '
+                                       f'border-radius: 6px; padding: 6px;')
+        self.detail_label.setText(detail.strip())
+        self.run_btn.setText('Run' if state == 'DISABLED' else 'Pause')
+        for btn in (self.run_btn, self.restart_btn):
+            btn.setEnabled(up)
+
+    def _report(self, ok: bool, message: str) -> None:
+        self.status_label.setText(message if ok else f'<span style="color:#c62828">{message}</span>')
+
+    def _on_run_clicked(self) -> None:
+        self.node.set_demo_enabled(self.run_btn.text() == 'Run', self._report)
+
+    def _on_restart_clicked(self) -> None:
+        self.node.restart_demo(self._report)
+
+
 class FlowLayout(QtWidgets.QLayout):
     """Left-to-right layout that wraps onto new lines (Qt's flow layout example)."""
 
@@ -1238,13 +1305,14 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         self._robot_panels = [RobotPanel(node, ns) for ns in node.robot_namespaces]
         self._line_panel = InfeedLinePanel(node)
         self._factory_panel = FactoryPanel(node.configure_factory)
+        self._demo_panel = DemoPanel(node)
 
         # Status strip on top (always visible), one tab per area below it.
         self._banner = StatusBanner(node)
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self._scrolled(ResponsiveColumns(
-            self._robot_panels, max_columns=max(1, len(self._robot_panels)))), 'Robot')
+            [*self._robot_panels, self._demo_panel], max_columns=2)), 'Robot')
         self.tabs.addTab(CameraPanel(node), 'Camera')
         self.tabs.addTab(self._scrolled(ResponsiveColumns(
             [self._line_panel, ConveyorsPanel(node, self._on_conveyor_changed)], max_columns=2)), 'Line && Belts')
@@ -1282,6 +1350,7 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
             rclpy.spin_once(self.node, timeout_sec=0)
         self._banner.refresh()
         self._line_panel.refresh()
+        self._demo_panel.refresh()
         fresh = time.monotonic() - self.node.factory_status_stamp < 3.0
         self._factory_panel.refresh(self.node.factory_status if fresh else None)
         for panel in self._robot_panels:
