@@ -2,6 +2,8 @@ import os
 from typing import List, Tuple
 import yaml
 from launch import Action, LaunchDescription
+from launch.actions import Shutdown
+from launch_ros.actions import Node
 from launch_ros.descriptions import ComposableNode
 from ament_index_python.packages import get_package_share_directory
 import isaac_ros_launch_utils as lu
@@ -12,22 +14,29 @@ from nvblox_ros_python_utils.nvblox_constants import NVBLOX_CONTAINER_NAME
 
 def get_depth_image_remappings(
     mode: NvbloxMode,
+    ns: str,
     depth_topics: List[str],
     depth_info_topics: List[str],
     color_topics: List[str],
     color_info_topics: List[str],
-    pose_topics: List[str] = [],
 ) -> List[Tuple[str, str]]:
-    """Build remappings using the loaded topic arrays index-by-index."""
+    """Build remappings using the loaded topic arrays index-by-index.
+
+    Topics in nvblox_topics.yaml are relative to the robot's namespace
+    (e.g. "camera/depth" -> "/robot_1/camera/depth"), matching what
+    group_a_bringup's camera_bridge publishes.
+    """
+    def resolve(topic: str) -> str:
+        return topic if topic.startswith("/") else f"/{ns}/{topic}"
+
     remappings = []
 
-    for i, (depth, depth_info, color, color_info, pose) in enumerate(zip(depth_topics, depth_info_topics, color_topics, color_info_topics, pose_topics)):
+    for i, (depth, depth_info, color, color_info) in enumerate(zip(depth_topics, depth_info_topics, color_topics, color_info_topics)):
         cam = f"camera_{i}"
         remappings.extend(
             [
-                (f"{cam}/depth/image", depth),
-                (f"{cam}/depth/camera_info", depth_info),
-                (f"pose", pose),
+                (f"{cam}/depth/image", resolve(depth)),
+                (f"{cam}/depth/camera_info", resolve(depth_info)),
             ]
         )
 
@@ -35,7 +44,7 @@ def get_depth_image_remappings(
         if mode is NvbloxMode.people_segmentation:
             img_target, info_target = "/segmentation/image_resized", "/segmentation/camera_info_resized"
         else:
-            img_target, info_target = color, color_info
+            img_target, info_target = resolve(color), resolve(color_info)
 
         remappings.extend(
             [
@@ -44,7 +53,16 @@ def get_depth_image_remappings(
             ]
         )
 
+    remappings.extend(get_tf_remappings(ns))
+
     return remappings
+
+
+def get_tf_remappings(ns: str) -> List[Tuple[str, str]]:
+    """The robot publishes its TF tree (world -> ... -> camera_optical_frame)
+    on its own /<ns>/tf, not the global /tf that tf2_ros hardcodes - same
+    reason as the tf_remappings in group_a_bringup/launch/bringup.launch.py."""
+    return [("/tf", f"/{ns}/tf"), ("/tf_static", f"/{ns}/tf_static")]
 
 
 def add_nvblox(args: lu.ArgumentContainer) -> List[Action]:
@@ -68,13 +86,12 @@ def add_nvblox(args: lu.ArgumentContainer) -> List[Action]:
         depth_info_topics = params.get("depth_info_topics", [])
         color_image_topics = params.get("color_image_topics", [])
         color_info_topics = params.get("color_info_topics", [])
-        pose_topics = params.get("pose_topics", [])
     except (KeyError, TypeError):
         raise KeyError("Invalid layout in nvblox_topics.yaml. Must match '/**' -> 'ros__parameters'.")
 
     # ── Configuration & Parameters ────────────────────────────────────────────
     num_cameras = len(depth_image_topics)
-    remappings = get_depth_image_remappings(mode, depth_image_topics, depth_info_topics, color_image_topics, color_info_topics, pose_topics)
+    remappings = get_depth_image_remappings(mode, args.robot_namespace, depth_image_topics, depth_info_topics, color_image_topics, color_info_topics)
 
     parameters = [
         os.path.join(vision_share, "config", "nvblox_params.yaml"),
@@ -97,7 +114,24 @@ def add_nvblox(args: lu.ArgumentContainer) -> List[Action]:
 
     actions = []
     if lu.is_true(args.run_standalone):
-        actions.append(lu.component_container(args.container_name))
+        # Same as lu.component_container(), plus the tf remaps as PROCESS-wide
+        # args: nvblox's tf2_ros::TransformListener spins its own internal
+        # node, which ignores the composable node's own (node-local)
+        # remappings above - without this it silently listens on the empty
+        # global /tf, every lookup fails, and depth/color images just pile up
+        # in nvblox's queues and get dropped without ever being integrated.
+        # (With run_standalone:=False the host container must pass these.)
+        tf_remap_args = [arg for src, dst in get_tf_remappings(args.robot_namespace) for arg in ("-r", f"{src}:={dst}")]
+        actions.append(
+            Node(
+                name=args.container_name,
+                package="rclcpp_components",
+                executable="component_container_mt",
+                on_exit=Shutdown(),
+                output="screen",
+                arguments=["--ros-args", "--log-level", "info", *tf_remap_args],
+            )
+        )
 
     actions.extend(
         [
@@ -107,7 +141,8 @@ def add_nvblox(args: lu.ArgumentContainer) -> List[Action]:
                     "Starting explicit nvblox pipeline | ",
                     f"input: '{args.input_type}' | ",
                     f"mode: '{mode}' | ",
-                    f"cameras: {num_cameras}",
+                    f"cameras: {num_cameras} | ",
+                    f"robot: '{args.robot_namespace}'",
                 ]
             ),
         ]
@@ -123,6 +158,7 @@ def generate_launch_description() -> LaunchDescription:
     args.add_arg("run_standalone", "True")
     args.add_arg("use_lidar_motion_compensation", "")
     args.add_arg("use_sim_time", "True", description="Use simulation clock")
+    args.add_arg("robot_namespace", "robot_1", description="Robot whose cameras and /<ns>/tf nvblox consumes")
 
     args.add_opaque_function(add_nvblox)
     return LaunchDescription(args.get_launch_actions())

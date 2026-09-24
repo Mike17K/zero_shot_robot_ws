@@ -269,16 +269,13 @@
              facing like the suction cups": same Z (protrusion) direction as
              the cups, just not in the middle of the array.
 
-             camera_joint yaws the camera body 90° about Z first: the camera
-             box is 0.040 x 0.095 (not square), and mounted at its default
-             orientation its LONG (0.095) side would face along plate-Y -
-             straight toward the cup grid's last row, with no room left to
-             clear it inside a 0.40-long plate (checked: -2.5cm of actual
-             overlap). Yawing about Z doesn't touch the Z axis itself, so it
-             doesn't affect "which way the camera looks" (still gp_tool0's
-             own Z, same as the cups) - it only swaps which box dimension
-             faces the edge, so the SHORT (0.040) side does instead, needing
-             far less edge clearance. -->
+             Gazebo camera sensors look along their link's +X axis (not Z),
+             so camera_joint rotates camera_link to map: X -> plate +Z (the
+             cup/approach direction, i.e. "down" when the tool faces down),
+             Y -> plate +X, Z -> plate +Y. The box is sized per camera_link's
+             own axes to match: 0.030 deep along the view axis (stays behind
+             the cup tips), 0.095 across the plate width, and only 0.040
+             along plate-Y so it clears the cup grid's last row at the edge. -->
         <xacro:property name="cup_last_row_edge_y" value="${-cup_row0_y + cup_radius}" />
         <xacro:property name="camera_gap" value="0.02" /> <!-- clearance from the nearest cup -->
         <xacro:property name="camera_y" value="${cup_last_row_edge_y + camera_gap + 0.040 / 2.0}" />
@@ -287,7 +284,7 @@
         <link name="camera_link">
             <visual>
                 <geometry>
-                    <box size="0.040 0.095 0.030" />
+                    <box size="0.030 0.095 0.040" />
                 </geometry>
                 <material name="dark_grey">
                     <color rgba="0.15 0.15 0.15 1.0" />
@@ -295,7 +292,7 @@
             </visual>
             <collision>
                 <geometry>
-                    <box size="0.040 0.095 0.030" />
+                    <box size="0.030 0.095 0.040" />
                 </geometry>
             </collision>
             <inertial>
@@ -308,14 +305,12 @@
         <joint name="camera_joint" type="fixed">
             <parent link="gripper_plate_link" />
             <child link="camera_link" />
-            <origin xyz="0 ${camera_y} ${camera_z}" rpy="0 0 ${pi/2}" />
+            <origin xyz="0 ${camera_y} ${camera_z}" rpy="0 ${-pi/2} ${-pi/2}" />
         </joint>
 
-        <!-- Optical frame - identical rotation to before: camera_link's own
-             axes are still unrotated relative to its parent's (gp_tool0
-             before, gripper_plate_link now), and that parent's Z axis is
-             still gp_tool0's own Z axis either way, so this still points
-             the optical Z axis the same direction as the suction cups. -->
+        <!-- Optical frame - standard REP-103 camera_link (X forward) ->
+             optical (Z forward, X right, Y down) rotation, so optical Z is
+             camera_link X, i.e. the same direction as the suction cups. -->
         <link name="camera_optical_frame" />
         <joint name="camera_optical_joint" type="fixed">
             <parent link="camera_link" />

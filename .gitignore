@@ -4,3 +4,5 @@ build/
 log/
 
 isaac_ros_assets/
+
+**/*.pyc

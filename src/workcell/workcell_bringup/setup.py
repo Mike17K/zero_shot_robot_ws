@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'infeed_line_controller = workcell_bringup.infeed_line_controller:main',
+            'cumotion_world_markers = workcell_bringup.collision_scene:main',
         ],
     },
 )
