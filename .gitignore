@@ -6,3 +6,5 @@ log/
 isaac_ros_assets/
 
 **/__pycache__/
+# Model weights for external/ libraries (scripts/setup_external.sh downloads them)
+external/weights/

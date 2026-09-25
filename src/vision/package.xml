@@ -3,7 +3,7 @@
 <package format="3">
   <name>vision</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Perception: zero-shot box pose from the gripper RGB-D camera (MobileSAM), plus the (unused) nvblox launch</description>
   <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
   <license>TODO: License declaration</license>
 
@@ -22,6 +22,18 @@
   <!-- Εξαρτήσεις για τη γέφυρα με το Gazebo Sim -->
   <depend>ros_gz_bridge</depend>
   <depend>ros_gz_interfaces</depend>
+
+  <!-- box_pose_estimator / box_pose_check (MobileSAM + timm come from
+       external/, not rosdep - see scripts/setup_external.sh) -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
+  <exec_depend>shared_utils</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <!-- Standard εξαρτήσεις του ROS 2 για Launch και Components -->
   <exec_depend>rclcpp_components</exec_depend>
