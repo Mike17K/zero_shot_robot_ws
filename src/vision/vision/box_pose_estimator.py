@@ -18,7 +18,7 @@ ROS interface (node <ns>/box_pose_estimator):
   ~/detections    geometry_msgs/PoseArray       top-face centres, closest to the camera first;
                                                 +Z = face normal (suction approach = -Z)
   ~/markers       visualization_msgs/MarkerArray  one flat cube per face (scale = face size) + label
-  ~/debug_image   sensor_msgs/Image (rgb8)      masks tinted, fitted rectangles drawn
+  ~/debug_image   sensor_msgs/Image (rgb8, latched)  masks tinted, fitted rectangles drawn
 """
 import threading
 import time
@@ -30,7 +30,7 @@ from geometry_msgs.msg import PoseArray, PoseStamped
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
 from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
@@ -38,7 +38,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from shared_utils.external import add_external_to_path, external_file
 from shared_utils.geometry import TfHelper, matrix_to_pose
 
-from .box_geometry import FaceParams, TopFace, backproject, dedupe, project, top_face
+from .box_geometry import FaceParams, TopFace, backproject, dedupe, drop_fraction, project, top_face
 
 COLORS = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48),
           (145, 30, 180), (70, 240, 240), (240, 50, 230)]
@@ -62,7 +62,7 @@ def _reason_category(why: str) -> str:
     """Group top_face()'s rejection reasons for the summary line."""
     for key, label in (('depth points', 'few depth points'), ('inliers', 'no clear plane'),
                        ('no plane', 'no clear plane'), ('tilted', 'tilted (side face)'),
-                       ('size', 'wrong size')):
+                       ('size', 'wrong size'), ('aspect', 'strip (aspect)')):
         if key in why:
             return label
     return why
@@ -78,18 +78,21 @@ class BoxPoseEstimator(Node):
         p('rate_hz', 0.0)
         p('max_pair_dt', 0.15)              # s between the colour and depth frames used together
         p('points_per_side', 16)            # SAM prompt grid (fewer = faster; the scene is just boxes)
+        p('points_per_batch', 8)            # prompts decoded at once: ~50-100 MB of VRAM each (SAM default 64 OOMs next to cuMotion)
         p('pred_iou_thresh', 0.88)
         p('stability_score_thresh', 0.90)
         p('min_mask_area', 300)             # px
         p('max_mask_fraction', 0.5)         # of the image: bigger masks are the belt / floor
         p('border_margin', 2)               # px: masks touching the image edge are cut-off boxes
         p('dedupe_distance', 0.03)          # m between face centres
+        p('min_height', 0.02)               # m a face must stand above its surroundings (belt / floor)
+        p('min_drop_fraction', 0.5)         # of a 6 px ring around the mask that must lie min_height lower
         defaults = FaceParams()
-        for name in ('plane_tolerance', 'min_inliers', 'max_tilt_deg', 'min_size', 'max_size'):
+        face_names = ('plane_tolerance', 'min_inliers', 'max_tilt_deg', 'min_size', 'max_size', 'max_aspect')
+        for name in face_names:
             p(name, getattr(defaults, name))
         self.face_params = FaceParams(**{
-            name: type(getattr(defaults, name))(self.get_parameter(name).value)
-            for name in ('plane_tolerance', 'min_inliers', 'max_tilt_deg', 'min_size', 'max_size')})
+            name: type(getattr(defaults, name))(self.get_parameter(name).value) for name in face_names})
 
         self._mask_gen = self._load_sam()
         ns = self.get_namespace().strip('/') or 'robot_1'
@@ -110,7 +113,9 @@ class BoxPoseEstimator(Node):
 
         self._poses_pub = self.create_publisher(PoseArray, '~/detections', 10)
         self._markers_pub = self.create_publisher(MarkerArray, '~/markers', 10)
-        self._debug_pub = self.create_publisher(Image, '~/debug_image', 1)
+        # Latched: a viewer opened after an estimate still gets its result.
+        self._debug_pub = self.create_publisher(
+            Image, '~/debug_image', QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         work = ReentrantCallbackGroup()
         self.create_service(Trigger, '~/detect', self._on_detect, callback_group=work)
         rate = float(self.get_parameter('rate_hz').value)
@@ -139,6 +144,7 @@ class BoxPoseEstimator(Node):
             points_per_side=int(self.get_parameter('points_per_side').value),
             pred_iou_thresh=float(self.get_parameter('pred_iou_thresh').value),
             stability_score_thresh=float(self.get_parameter('stability_score_thresh').value),
+            points_per_batch=int(self.get_parameter('points_per_batch').value),
             min_mask_region_area=int(self.get_parameter('min_mask_area').value))
 
     # ── Inputs ───────────────────────────────────────────────────────────────
@@ -190,8 +196,15 @@ class BoxPoseEstimator(Node):
                 return False, f'colour {rgb.shape[:2]} and depth {depth.shape} sizes differ'
 
             t0 = time.monotonic()
-            with self._torch.inference_mode():
-                masks = self._mask_gen.generate(rgb)
+            try:
+                with self._torch.inference_mode():
+                    masks = self._mask_gen.generate(rgb)
+            except self._torch.OutOfMemoryError as exc:
+                return False, f'MobileSAM ran out of GPU memory - lower points_per_batch ({exc})'.split('\n')[0]
+            finally:
+                # Give the decoder's scratch memory back: cuMotion shares the GPU.
+                if self._torch.cuda.is_available():
+                    self._torch.cuda.empty_cache()
             t_sam = time.monotonic() - t0
 
             faces, face_masks, rejected = self._faces(masks, depth, K)
@@ -241,14 +254,55 @@ class BoxPoseEstimator(Node):
             if face is None:
                 reject(_reason_category(why))
                 continue
+            # Raised above its surroundings? Local, so it can't be fooled the way a
+            # global "belt plane" is when a box top fills most of the image.
+            if drop_fraction(face, seg, depth, K, fp, float(self.get_parameter('min_height').value)) \
+                    < float(self.get_parameter('min_drop_fraction').value):
+                reject('not raised (flat on the belt)')
+                continue
             faces.append(face)
             face_masks.append(seg)
+        faces, face_masks, merged = self._merge_coplanar(faces, face_masks, depth, K)
+        if merged:
+            reject(f'merged x{merged}')
         kept = dedupe(faces, float(self.get_parameter('dedupe_distance').value))
         mask_of = {id(f): seg for f, seg in zip(faces, face_masks)}
         kept_masks = [mask_of[id(f)] for f in kept]
         if len(kept) < len(faces):
             reject(f'duplicate x{len(faces) - len(kept)}')
         return kept, kept_masks, ', '.join(f'{k} {v}' for k, v in reasons.items()) or 'none'
+
+    def _merge_coplanar(self, faces, masks, depth, K):
+        """Join faces that lie in the same plane and whose masks touch - one
+        box top that SAM split in two (a shadow line, a label) - and refit the
+        union. Repeats until nothing merges; returns (faces, masks, merges)."""
+        fp = self.face_params
+        kernel = np.ones((7, 7), np.uint8)
+        merges = 0
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(faces)):
+                for j in range(i + 1, len(faces)):
+                    a, b = faces[i], faces[j]
+                    if (abs(a.R[:, 2] @ b.R[:, 2]) < 0.98
+                            or abs(a.R[:, 2] @ (b.center - a.center)) > 2 * fp.plane_tolerance):
+                        continue
+                    grown = cv2.dilate(masks[i].astype(np.uint8), kernel).astype(bool)
+                    if not (grown & masks[j]).any():
+                        continue
+                    union = masks[i] | masks[j]
+                    face, _ = top_face(backproject(union, depth, K, fp.near, fp.far), fp)
+                    if face is None:
+                        continue
+                    faces[i], masks[i] = face, union
+                    del faces[j], masks[j]
+                    merges += 1
+                    changed = True
+                    break
+                if changed:
+                    break
+        return faces, masks, merges
 
     def _to_target(self, faces, stamp):
         target = self.get_parameter('target_frame').value
@@ -296,8 +350,6 @@ class BoxPoseEstimator(Node):
         self._markers_pub.publish(markers)
 
     def _publish_debug(self, rgb, faces, face_masks, K, header) -> None:
-        if self._debug_pub.get_subscription_count() == 0:
-            return
         img = rgb.copy()
         for i, (f, seg) in enumerate(zip(faces, face_masks)):
             color = np.array(COLORS[i % len(COLORS)], dtype=np.float32)

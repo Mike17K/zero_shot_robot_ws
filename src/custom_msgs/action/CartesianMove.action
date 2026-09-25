@@ -1,7 +1,10 @@
-# Straight-line move of the tool (gripper_tcp) by an offset
+# Straight-line move of the tool (gripper_tcp) by an offset - or to an absolute
+# pose (position + orientation interpolated along the line)
 # (navigator_cli's navigator_server, /<robot>/navigator/cartesian_move).
 geometry_msgs/Vector3 offset   # meters
 string frame                   # "world" (default) or "tool" (gripper_tcp axes, +Z out of the cups)
+bool use_target_pose           # true: go to target_pose instead of moving by offset
+geometry_msgs/PoseStamped target_pose  # gripper_tcp goal (any frame TF knows; offset/frame ignored)
 float64 speed                  # max tool speed, m/s; 0 = the server default
 float64 stop_force             # N; > 0 = guarded move: stop as soon as the gripper force pad
                                # (/<robot>/gripper/wrench) reads this much more than at the start,

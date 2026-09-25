@@ -8,7 +8,8 @@ script, via shared_utils.navigation.NavigatorClient) can drive the robot.
 Actions (under /<namespace>/navigator/):
   navigate_to_node  custom_msgs/action/NavigateToNode  graph path (or direct joint
                                                       move) to a node id / label
-  cartesian_move    custom_msgs/action/CartesianMove   straight-line tool offset;
+  cartesian_move    custom_msgs/action/CartesianMove   straight-line tool offset (or to a
+                                                      target pose, use_target_pose);
                                                       stop_force > 0 = guarded move
                                                       (stop on gripper-pad contact)
 
@@ -199,12 +200,15 @@ class NavigatorServer:
         goal = goal_handle.request
         result = CartesianMove.Result(success=False, fraction=0.0)
         offset = (goal.offset.x, goal.offset.y, goal.offset.z)
+        tp = goal.target_pose.pose.position
+        what = (f'to ({tp.x:+.3f}, {tp.y:+.3f}, {tp.z:+.3f}) in {goal.target_pose.header.frame_id}'
+                if goal.use_target_pose else f'{offset} m in {goal.frame or "world"} frame')
         guarded = goal.stop_force > 0.0
         with self._busy:
             try:
                 speed = goal.speed if goal.speed > 0.0 else self._node.get_parameter('cartesian_speed').value
                 goal_handle.publish_feedback(CartesianMove.Feedback(
-                    status=f'moving {offset} m in {goal.frame or "world"} frame'
+                    status=f'moving {what}'
                            + (f' until {goal.stop_force:.1f} N contact' if guarded else '')))
                 start = self._tool_position()
                 if guarded:
@@ -213,8 +217,11 @@ class NavigatorServer:
                         result.message = error
                         return self._finish(goal_handle, result)
                 try:
-                    r = self.robot.manager.execute_cartesian(offset, frame=goal.frame or 'world',
-                                                             max_speed=speed)
+                    if goal.use_target_pose:
+                        r = self.robot.manager.execute_cartesian_to(goal.target_pose, max_speed=speed)
+                    else:
+                        r = self.robot.manager.execute_cartesian(offset, frame=goal.frame or 'world',
+                                                                 max_speed=speed)
                 finally:
                     guard = self._stop_guard() if guarded else None
                 end = self._tool_position()
@@ -226,14 +233,14 @@ class NavigatorServer:
                     result.message = (f'contact: {guard["force"]:.1f} N after '
                                       f'{result.distance * 100:.1f} cm')
                 elif guarded:
-                    result.message = (f'no contact within {math.hypot(*offset) * 100:.0f} cm'
+                    result.message = (f'no contact within {result.distance * 100:.0f} cm'
                                       if r.success else r.message)
                 else:
                     result.success, result.message = r.success, r.message
             except Exception as exc:
                 result.message = f'error: {exc}'
                 Logger.ERROR(f'cartesian_move: {exc}\n{traceback.format_exc()}')
-        Logger.INFO(f'cartesian_move {offset}: {result.message}')
+        Logger.INFO(f'cartesian_move {what}: {result.message}')
         return self._finish(goal_handle, result)
 
 

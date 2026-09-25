@@ -41,6 +41,7 @@ class FaceParams:
     max_tilt_deg: float = 35.0    # steeper = a side face (or the camera looks too obliquely)
     min_size: float = 0.05        # m, face edges
     max_size: float = 0.50
+    max_aspect: float = 4.0       # long / short edge - belt rollers and rails are long thin strips
 
 
 def backproject(mask: np.ndarray, depth: np.ndarray, K: np.ndarray,
@@ -115,12 +116,33 @@ def top_face(points: np.ndarray, params: FaceParams,
     long_2d, (long_len, short_len) = (e1, (l1, l2)) if l1 >= l2 else (e2, (l2, l1))
     if short_len < params.min_size or long_len > params.max_size:
         return None, f'size {long_len:.2f}x{short_len:.2f} m'
+    if long_len > params.max_aspect * short_len:
+        return None, f'aspect {long_len / short_len:.1f} (strip, not a box top)'
 
     x = long_2d[0] * u + long_2d[1] * v
     x /= np.linalg.norm(x)
     y = np.cross(n, x)
     center = origin + cu * u + cv * v
     return TopFace(center, np.stack([x, y, n], axis=1), (long_len, short_len), int(inl.sum()), tilt), 'ok'
+
+
+def drop_fraction(face: TopFace, mask: np.ndarray, depth: np.ndarray, K: np.ndarray,
+                  params: FaceParams, min_height: float, ring_px: int = 6) -> float:
+    """Share of the pixels in a ring just outside the mask that lie at least
+    min_height BELOW the face plane (1.0 when the ring has no valid depth,
+    i.e. nothing measurable around it). A box top stands above what surrounds
+    it; a flat mark or patch on the belt does not."""
+    kernel = np.ones((2 * ring_px + 1, 2 * ring_px + 1), np.uint8)
+    ring = cv2.dilate(mask.astype(np.uint8), kernel).astype(bool) & ~mask
+    # Pixels with no depth return (beyond the far clip) are certainly lower.
+    zs = depth[ring]
+    far = int((~np.isfinite(zs) | (zs >= params.far)).sum())
+    pts = backproject(ring, depth, K, params.near, params.far)
+    if len(pts) + far == 0:
+        return 1.0
+    n = face.R[:, 2]
+    below = (pts - face.center) @ n < -min_height
+    return float((int(below.sum()) + far) / (len(pts) + far))
 
 
 def project(points: np.ndarray, K: np.ndarray) -> np.ndarray:

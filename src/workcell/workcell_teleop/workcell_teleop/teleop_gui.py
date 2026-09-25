@@ -5,7 +5,8 @@ Layout: a status strip on top (one coloured chip per subsystem: sim clock and
 real-time factor, robot joint states, cuMotion planner, navigator server,
 gripper, feeding line, box factory, demo), always visible, then one tab per
 area - Robot (jog/gripper, demo run/pause/restart), Camera (live gripper-camera colour/depth feed,
-<namespace>/camera/color|depth from group_a_bringup's camera_bridge), Line &
+<namespace>/camera/color|depth from group_a_bringup's camera_bridge, or the last vision
+box_pose_estimator result with its detections drawn), Line &
 Belts (feeding line + conveyor speeds) and Boxes (factory + spawn). Panels in
 a tab re-flow into columns with the window width. Controls are sized for
 touch.
@@ -202,15 +203,19 @@ class TeleopNode(Node):
         # tick, and only while visible.
         self.declare_parameter('camera_color_topic', 'camera/color')
         self.declare_parameter('camera_depth_topic', 'camera/depth')
+        # vision's box_pose_estimator overlay (latched, one image per estimate)
+        self.declare_parameter('camera_detections_topic', 'box_pose_estimator/debug_image')
         self.camera_frames: dict[tuple[str, str], Image] = {}
         self.camera_stamps: dict[tuple[str, str], list[float]] = {}
-        camera_topics = {'color': self.get_parameter('camera_color_topic').value,
-                         'depth': self.get_parameter('camera_depth_topic').value}
+        self.camera_topics = {'color': self.get_parameter('camera_color_topic').value,
+                              'depth': self.get_parameter('camera_depth_topic').value,
+                              'detections': self.get_parameter('camera_detections_topic').value}
+        latched_image = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         for ns in self.robot_namespaces:
-            for kind, topic in camera_topics.items():
+            for kind, topic in self.camera_topics.items():
                 self.create_subscription(Image, f'/{ns}/{topic}',
                                          lambda msg, key=(ns, kind): self._on_camera(key, msg),
-                                         qos_profile_sensor_data)
+                                         latched_image if kind == 'detections' else qos_profile_sensor_data)
 
         # Workcell status strip: sim clock (real-time factor), demo state and
         # which servers exist (polled from the ROS graph, 1 Hz).
@@ -1236,7 +1241,8 @@ class CameraPanel(QtWidgets.QWidget):
         self.robot.addItems(node.robot_namespaces)
         self.robot.setVisible(len(node.robot_namespaces) > 1)
         self.kind = QtWidgets.QComboBox()
-        self.kind.addItems(['color', 'depth'])
+        self.kind.addItems(['color', 'depth', 'detections'])
+        self.kind.setToolTip('detections = the last box_pose_estimator result (updated on every ~/detect)')
         self.info = QtWidgets.QLabel('-')
         bar = QtWidgets.QHBoxLayout()
         bar.addWidget(self.robot)
@@ -1261,13 +1267,19 @@ class CameraPanel(QtWidgets.QWidget):
         if not self.isVisible():
             return
         key = (self.robot.currentText(), self.kind.currentText())
-        topic = f'/{key[0]}/camera/{key[1]}'
+        topic = f'/{key[0]}/{self.node.camera_topics[key[1]]}'
         stamps = self.node.camera_stamps.get(key, [])
-        if not stamps or time.monotonic() - stamps[-1] > self.STALE_SEC:
-            self.view.setText(f'no images on {topic}')
+        # Detections arrive once per estimate, so an old one is still the latest result.
+        live = key[1] != 'detections'
+        if not stamps or (live and time.monotonic() - stamps[-1] > self.STALE_SEC):
+            self.view.setText(f'no images on {topic}' if live else
+                              f'no detections yet - run {topic.rsplit("/", 1)[0]}/detect '
+                              f'(vision box_pose.launch.py)')
             self.info.setText(topic)
             self._shown_stamp = None
             return
+        if not live:
+            self.info.setText(f'{topic}  last estimate {time.monotonic() - stamps[-1]:.0f} s ago')
         msg = self.node.camera_frames[key]
         stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
         if stamp == self._shown_stamp:
@@ -1279,8 +1291,9 @@ class CameraPanel(QtWidgets.QWidget):
         self._shown_stamp = stamp
         self.view.setPixmap(QtGui.QPixmap.fromImage(img).scaled(
             self.view.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
-        rate = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 and stamps[-1] > stamps[0] else 0.0
-        self.info.setText(f'{topic}  {msg.width}x{msg.height} {msg.encoding}  {rate:.1f} Hz')
+        if live:
+            rate = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 and stamps[-1] > stamps[0] else 0.0
+            self.info.setText(f'{topic}  {msg.width}x{msg.height} {msg.encoding}  {rate:.1f} Hz')
 
 
 APP_STYLE = """

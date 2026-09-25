@@ -186,6 +186,20 @@ class Gp70lRobotManager(BaseRobotManager):
             result.success, result.message = False, 'execution failed'
         return result
 
+    def execute_cartesian_to(self, target, max_speed: float = 0.05) -> CartesianResult:
+        """Straight-line tool move to target (PoseStamped, any TF frame),
+        position and orientation interpolated along the line. Blocking."""
+        goal = self.tf.transform_pose(target, self.world_frame)
+        if goal is None:
+            return CartesianResult(False, f'no TF {target.header.frame_id} -> {self.world_frame}')
+        result = self.cartesian.plan_waypoints([goal.pose], max_speed=max_speed)
+        if not result.success:
+            Logger.ERROR(f'cartesian move to pose: {result.message}')
+            return result
+        if not self.executor.execute(result.trajectory):
+            result.success, result.message = False, 'execution failed'
+        return result
+
     def cancel_motion(self) -> bool:
         """Stop the trajectory currently executing (from another thread)."""
         return self.executor.cancel()

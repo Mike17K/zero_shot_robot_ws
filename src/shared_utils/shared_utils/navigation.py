@@ -7,6 +7,7 @@ other script.
     nav.navigate('6')                    # graph path to node 6 (or a label)
     nav.cartesian((0.0, 0.0, -0.10))     # 10 cm straight down (world frame)
     nav.cartesian((0.0, 0.0, -0.30), stop_force=5.0)   # down until the pad touches something
+    nav.move_to_pose(pose_stamped)       # straight tool line to an absolute gripper_tcp pose
     nav.gripper(True)                    # suction on
     nav.holding()                        # models currently held
 
@@ -20,7 +21,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
-from geometry_msgs.msg import Vector3
+from geometry_msgs.msg import PoseStamped, Vector3
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -93,6 +94,20 @@ class NavigatorClient:
         goal = CartesianMove.Goal(offset=Vector3(x=float(offset[0]), y=float(offset[1]),
                                                  z=float(offset[2])),
                                   frame=frame, speed=float(speed), stop_force=float(stop_force))
+        response, _ = send_action_goal(self._node, self._cart, goal, timeout_sec=timeout_sec)
+        if response is None:
+            return NavResult(False, 'cartesian_move unavailable, rejected or timed out')
+        r = response.result
+        return NavResult(bool(r.success), r.message, fraction=r.fraction,
+                         contact=bool(r.contact), force=float(r.force), distance=float(r.distance))
+
+    def move_to_pose(self, pose: PoseStamped, speed: float = 0.0, stop_force: float = 0.0,
+                     timeout_sec: Optional[float] = None) -> NavResult:
+        """Straight-line tool move to an absolute gripper_tcp pose (position and
+        orientation interpolated along the line). Blocking; stop_force as in
+        cartesian()."""
+        goal = CartesianMove.Goal(use_target_pose=True, target_pose=pose, speed=float(speed),
+                                  stop_force=float(stop_force))
         response, _ = send_action_goal(self._node, self._cart, goal, timeout_sec=timeout_sec)
         if response is None:
             return NavResult(False, 'cartesian_move unavailable, rejected or timed out')

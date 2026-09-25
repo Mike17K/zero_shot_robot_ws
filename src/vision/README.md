@@ -1,5 +1,7 @@
 # Box pose estimator (zero-shot, MobileSAM)
 
+Full description: [docs/VISION.md](../../docs/VISION.md).
+
 `box_pose_estimator` finds box top faces in the gripper camera
 (`/<ns>/camera/color`, `camera/depth`, `camera/camera_info`):
 MobileSAM masks → depth back-projection → largest plane (RANSAC) → oriented

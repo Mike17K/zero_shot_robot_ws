@@ -3,16 +3,23 @@
 
 Whenever a box waits at the infeed beam, the robot is idle and holds nothing:
 
-  1. navigate to pick_node (above the beam)
-  2. straight down (cartesian) until the gripper's force pad touches the box -
-     at most approach_max_distance; contact = the pad's force changing by
-     more than contact_force N (a guarded cartesian_move), so any box height
-     works
-  3. suction on - and wait until gripper_manager reports the grasp
-  4. straight up (cartesian) lift_distance with the box
-  5. navigate to the next place node (place_nodes, round robin or random)
-  6. suction off
-  7. navigate back to home_node and wait for the next box
+  1. navigate to inspect_node (5, the InspectionPoint = the home pose -
+     usually already there)
+  2. with use_vision: ask vision's box_pose_estimator for the box top faces
+     in the gripper camera, keep the BIGGEST one, and move the tool in a
+     straight line from there to grasp_standoff above its centre - suction
+     plate parallel to the face (tool +Z into it) and the plate's long side
+     along the face's long edge (see grasp_pose_from_face). Without vision
+     the approach starts straight down from inspect_node itself.
+  3. straight towards the face (cartesian, along the tool +Z; straight down
+     without vision) until the gripper's force pad touches it - at most
+     approach_max_distance; contact = the pad's force changing by more than
+     contact_force N (a guarded cartesian_move), so any box height works
+  4. suction on - and wait until gripper_manager reports the grasp
+  5. straight up (cartesian) lift_distance with the box
+  6. navigate to the next place node (place_nodes, round robin or random)
+  7. suction off
+  8. navigate back to home_node and wait for the next box
 
 Lifting the box clears the beam, so the feeding line restarts by itself
 (workcell_bringup's infeed_line_controller) and the next box arrives while
@@ -39,7 +46,9 @@ import random
 import threading
 import time
 
+import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -47,7 +56,37 @@ from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
 
 from custom_msgs.msg import InfeedLineState
+from shared_utils.geometry import TfHelper, matrix_to_pose, pose_to_matrix
 from shared_utils.navigation import NavigatorClient
+from shared_utils.perception import BoxDetectionClient
+
+TOOL_FRAME = 'gripper_tcp'
+
+
+def grasp_pose_from_face(face: np.ndarray, standoff: float, current_rotation: np.ndarray) -> np.ndarray:
+    """Tool (gripper_tcp) pose, as a 4x4 matrix in the face's frame, for a
+    suction grasp of a box top face.
+
+    face: 4x4 face pose (vision's convention: +X long edge, +Y short edge,
+    +Z face normal pointing away from the box). The tool's +Z points out of
+    the suction cups, so it must point INTO the face (-normal); the plate's
+    long side is its +Y (0.30 x 0.40 m, group_a_macro.xacro), laid along the
+    face's long edge. That leaves two orientations 180 deg apart about the
+    normal - the one closer to current_rotation is used, so the wrist turns
+    as little as possible. The tool sits `standoff` above the face centre,
+    along the normal (the guarded approach closes the gap)."""
+    x_f, n = face[:3, 0], face[:3, 2]
+    z_t = -n
+    best = None
+    for y_t in (x_f, -x_f):
+        R = np.stack([np.cross(y_t, z_t), y_t, z_t], axis=1)
+        turn = np.arccos(np.clip((np.trace(current_rotation.T @ R) - 1.0) / 2.0, -1.0, 1.0))
+        if best is None or turn < best[0]:
+            best = (turn, R)
+    T = np.eye(4)
+    T[:3, :3] = best[1]
+    T[:3, 3] = face[:3, 3] + n * standoff
+    return T
 
 
 class StepFailed(Exception):
@@ -68,20 +107,29 @@ class PickPlaceDemo(Node):
         p = self.declare_parameter
         p('robot_namespace', 'robot_1')
         p('line_namespace', 'conveyor_package_infeed')
-        p('pick_node', '6')
         p('place_nodes', ['2', '3', '4'])
         p('place_order', 'round_robin')
         p('home_node', '5')
+        p('place_speed', 1.0)           # cuMotion time dilation for the moves to the place nodes (1.0 = full speed)
+        p('return_speed', 1.0)          # cuMotion time dilation for place node -> home after placing (1.0 = full speed)
+        p('nav_speed', 0.75)            # cuMotion time dilation for every other navigation (inspect, home)
+        p('inspect_node', '5')          # every pick starts here (vision looks from here)
+        p('use_vision', True)
+        p('grasp_standoff', 0.10)
+        p('align_speed', 0.075)
+        p('detect_timeout', 15.0)
         p('approach_max_distance', 0.30)
         p('approach_speed', 0.015)
         p('contact_force', 5.0)
         p('lift_distance', 0.30)
-        p('lift_speed', 0.05)
+        p('lift_speed', 0.075)
         p('grasp_wait_sec', 3.0)
         p('start_enabled', True)
         p('go_home_on_start', True)
 
         self.nav = NavigatorClient(self, namespace=self._p('robot_namespace'))
+        self.boxes = BoxDetectionClient(self, namespace=self._p('robot_namespace'))
+        self.tf = TfHelper(self, f"/{self._p('robot_namespace')}/tf")
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self._line: InfeedLineState = None
         self.create_subscription(InfeedLineState, f"/{self._p('line_namespace')}/line/state",
@@ -171,26 +219,66 @@ class PickPlaceDemo(Node):
 
     # ── Steps ───────────────────────────────────────────────────────────────
 
-    def _navigate(self, node: str, state: str, why: str) -> None:
+    def _navigate(self, node: str, state: str, why: str, speed: float = 0.0) -> None:
+        """speed: cuMotion time dilation (0, 1]; 0 = nav_speed."""
         self._check_restart()
         self._set_state(state, f'{why}: navigating to node {node}')
-        r = self.nav.navigate(node)
+        r = self.nav.navigate(node, speed=speed or float(self._p('nav_speed')))
         if not r.success:
             raise StepFailed(f'navigate to node {node} failed: {r.message}')
 
-    def _approach_until_contact(self, state: str) -> float:
-        """Straight down until the force pad touches; returns the distance travelled."""
+    def _align_over_box(self, state: str) -> None:
+        """Vision: biggest box top face -> tool pose grasp_standoff above it -> straight line there."""
+        self._check_restart()
+        self._set_state(state, 'vision: detecting boxes')
+        r = self.boxes.detect(timeout_sec=float(self._p('detect_timeout')))
+        if not r.success:
+            raise StepFailed(f'vision: {r.message}')
+        if not r.boxes:
+            raise StepFailed(f'vision: no box in view ({r.message})')
+        box = max(r.boxes, key=lambda b: b.area)
+        frame = box.pose.header.frame_id
+        current = self.tf.frame_pose(frame, TOOL_FRAME)
+        if current is None:
+            raise StepFailed(f'vision: no TF {frame} -> {TOOL_FRAME}')
+        T = grasp_pose_from_face(pose_to_matrix(box.pose.pose), float(self._p('grasp_standoff')),
+                                 pose_to_matrix(current.pose)[:3, :3])
+        target = PoseStamped()
+        target.header.frame_id = frame
+        target.pose = matrix_to_pose(T)
+        c = box.pose.pose.position
+        self._set_state(state, f'vision: biggest of {len(r.boxes)}: {box.size[0] * 100:.0f}x'
+                               f'{box.size[1] * 100:.0f} cm at ({c.x:+.2f}, {c.y:+.2f}, {c.z:+.2f}) - aligning')
+        self._check_restart()
+        m = self.nav.move_to_pose(target, speed=float(self._p('align_speed')))
+        if not m.success:
+            raise StepFailed(f'align over the box: {m.message}')
+
+    def _approach_until_contact(self, state: str, frame: str) -> float:
+        """Towards the box until the force pad touches - along the tool +Z
+        (frame 'tool') or straight down ('world'); returns the distance travelled."""
         self._check_restart()
         d, force = float(self._p('approach_max_distance')), float(self._p('contact_force'))
-        self._set_state(state, f'approach: down until contact ({force:.0f} N, max {d * 100:.0f} cm)')
-        r = self.nav.cartesian((0.0, 0.0, -d), frame='world', speed=self._p('approach_speed'),
-                               stop_force=force)
+        offset = (0.0, 0.0, d) if frame == 'tool' else (0.0, 0.0, -d)
+        self._set_state(state, f'approach: until contact ({force:.0f} N, max {d * 100:.0f} cm)')
+        r = self.nav.cartesian(offset, frame=frame, speed=self._p('approach_speed'), stop_force=force)
         if not r.contact:
             if r.distance > 0.0:
-                self._straight(+r.distance, state, 'no contact - backing out')
+                self._back_out(r.distance, frame, state, 'no contact - backing out')
             raise StepFailed(f'approach: {r.message}')
         self._set_state(state, f'approach: {r.message}')
         return r.distance
+
+    def _back_out(self, distance: float, frame: str, state: str, why: str) -> None:
+        """Undo an approach of `distance` made along the tool +Z / straight down."""
+        if frame == 'world':
+            self._straight(+distance, state, why)
+            return
+        self._check_restart()
+        self._set_state(state, f'{why}: {distance * 100:.0f} cm back along the tool axis')
+        r = self.nav.cartesian((0.0, 0.0, -distance), frame='tool', speed=self._p('approach_speed'))
+        if not r.success:
+            raise StepFailed(f'backing out failed: {r.message}')
 
     def _straight(self, dz: float, state: str, why: str, speed: float = None) -> None:
         self._check_restart()
@@ -218,26 +306,30 @@ class PickPlaceDemo(Node):
         return []
 
     def run_cycle(self) -> None:
-        pick, home = self._p('pick_node'), self._p('home_node')
-
-        self._navigate(pick, self.PICKING, 'box at the beam')
-        d = self._approach_until_contact(self.PICKING)
+        home, start = self._p('home_node'), self._p('inspect_node')
+        self._navigate(start, self.PICKING, 'box at the beam - inspecting')
+        frame = 'world'
+        if self._p('use_vision'):
+            self._align_over_box(self.PICKING)
+            frame = 'tool'
+        d = self._approach_until_contact(self.PICKING, frame)
         self._gripper(True, self.PICKING)
         held = self._wait_for_grasp()
         if not held:
             # Nothing within suction reach: back out cleanly, then stop.
             self.nav.gripper(False)
-            self._straight(+d, self.PICKING, 'no grasp - backing out')
+            self._back_out(d, frame, self.PICKING, 'no grasp - backing out')
             self._navigate(home, self.RETURNING, 'no grasp')
-            raise StepFailed(f'pad touched something {d * 100:.0f} cm below node {pick} '
+            raise StepFailed(f'pad touched something {d * 100:.0f} cm into the approach from node {start} '
                              f'but no box was grasped (touched the belt, or the box is off-centre?)')
         self._straight(+float(self._p('lift_distance')), self.PICKING, f'lifting {", ".join(held)}',
                        speed=float(self._p('lift_speed')))
 
         place = self.next_place_node()
-        self._navigate(place, self.PLACING, f'carrying {", ".join(held)}')
+        self._navigate(place, self.PLACING, f'carrying {", ".join(held)}',
+                       speed=float(self._p('place_speed')))
         self._gripper(False, self.PLACING)
-        self._navigate(home, self.RETURNING, 'placed')
+        self._navigate(home, self.RETURNING, 'placed', speed=float(self._p('return_speed')))
         self.cycles += 1
 
     # ── Main loop (worker thread; ROS spins on the executor) ───────────────
