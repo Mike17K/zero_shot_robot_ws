@@ -4,3 +4,9 @@
 [submodule "src/robots/motoman_ros2_support_packages"]
 	path = src/robots/motoman_ros2_support_packages
 	url = https://github.com/Yaskawa-Global/motoman_ros2_support_packages.git
+[submodule "external/MobileSAM"]
+	path = external/MobileSAM
+	url = https://github.com/ChaoningZhang/MobileSAM.git
+[submodule "external/pytorch-image-models"]
+	path = external/pytorch-image-models
+	url = https://github.com/huggingface/pytorch-image-models.git

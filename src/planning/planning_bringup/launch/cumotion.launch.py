@@ -20,9 +20,9 @@ def _make_param_file(path, context):
     return pf.evaluate(context)
 
 
-def _make_temp_file(contents: str) -> str:
+def _make_temp_file(contents: str, suffix: str = ".yaml") -> str:
     """Create a temporary file with the given contents and return its path."""
-    temp_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".yaml")
+    temp_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=suffix)
     temp_file.write(contents)
     temp_file.close()
     return temp_file.name
@@ -96,6 +96,16 @@ def launch_setup(context, launch_configs):
     launch_configs['urdf_file_path'] = str(urdf_path_sub)
     launch_configs['parameters_path'] = str(os.path.join(pkg_bringup, "config", "group_a", "cumotion_params.yaml"))
     launch_configs['joint_states_topic'] = str("/" + namespace + "/joint_states")
+
+    # Static world: with read_esdf_world: false this is cuMotion's whole
+    # world (plus per-request `world` objects). Empty scene file param ->
+    # generate it from workcell_bringup/layout.py so it can't drift from
+    # what Gazebo spawns; a path overrides it.
+    scene_file = launch_configs['moveit_collision_objects_scene_file'].perform(context)
+    if not scene_file:
+        from workcell_bringup.collision_scene import collision_scene
+        scene_file = _make_temp_file(collision_scene(namespace), suffix=".scene")
+    launch_configs['moveit_collision_objects_scene_file'] = scene_file
 
     env_variables = dict(os.environ)
 

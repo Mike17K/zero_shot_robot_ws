@@ -1,3 +1,32 @@
+# Box pose estimator (zero-shot, MobileSAM)
+
+Full description: [docs/VISION.md](../../docs/VISION.md).
+
+`box_pose_estimator` finds box top faces in the gripper camera
+(`/<ns>/camera/color`, `camera/depth`, `camera/camera_info`):
+MobileSAM masks → depth back-projection → largest plane (RANSAC) → oriented
+rectangle (`vision/box_geometry.py`) → pose in `world` via the robot's TF.
+
+```bash
+# once, inside the container: MobileSAM + timm submodules in external/, weights
+./scripts/setup_external.sh
+ros2 launch vision box_pose.launch.py              # add rate_hz:=1.0 for continuous
+ros2 service call /robot_1/box_pose_estimator/detect std_srvs/srv/Trigger
+ros2 run vision box_pose_check --ros-args -p trigger_period:=5.0   # errors vs Gazebo ground truth
+```
+
+Outputs under `/<ns>/box_pose_estimator/`: `detections` (PoseArray, top-face
+centres, +Z = face normal, closest first), `markers` (MarkerArray, face
+size in `scale`), `debug_image` (masks + fitted rectangles).
+Masks are rejected when tiny, belt-sized, cut off by the image edge, not
+planar, tilted more than `max_tilt_deg` (side faces) or outside
+`min_size`–`max_size`.
+
+External libraries are found through `shared_utils.external`
+(`$ZSR_EXTERNAL_DIR`, default `/workspaces/isaac_ros-dev/external`).
+
+---
+
 # Launch
 
 ros2 launch vision nvblox.launch.py input_type:=depth_image mode:=static

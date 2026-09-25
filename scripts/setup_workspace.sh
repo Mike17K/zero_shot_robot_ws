@@ -17,3 +17,9 @@ source ~/.bashrc
 make rosdeps
 make
 source install/setup.bash
+
+# for SAM
+# bash scripts/setup_external.sh
+# cd external/MobileSAM/
+# pip install -e . --break-system-packages
+# pip install torchvision  --break-system-packages

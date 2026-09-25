@@ -79,5 +79,11 @@ group_a_moveit_config package. The original file is located at:
     <disable_collisions link1="suction_cup_11_link" link2="gripper_plate_link" reason="Adjacent" />
     <disable_collisions link1="suction_cup_12_link" link2="gripper_plate_link" reason="Adjacent" />
     <disable_collisions link1="gripper_tcp" link2="gripper_plate_link" reason="Adjacent" />
+    <!-- Force-sensor pad: on the plate (via the cup-tip plane), flush with the
+         camera's front face. -->
+    <disable_collisions link1="gripper_force_sensor_link" link2="gripper_plate_link" reason="Adjacent" />
+    <disable_collisions link1="gripper_force_sensor_link" link2="camera_link" reason="Adjacent" />
+    <disable_collisions link1="gripper_force_sensor_link" link2="gp_link_6" reason="Never" />
+    <disable_collisions link1="gripper_force_sensor_link" link2="gp_tool0" reason="Never" />
 
 </robot>

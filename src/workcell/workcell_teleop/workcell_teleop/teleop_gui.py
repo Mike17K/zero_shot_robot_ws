@@ -3,9 +3,13 @@
 
 Layout: a status strip on top (one coloured chip per subsystem: sim clock and
 real-time factor, robot joint states, cuMotion planner, navigator server,
-gripper, feeding line, box factory, demo), then the panels in a scroll area,
-re-flowing into 3 / 2 / 1 columns with the window width. Controls are sized
-for touch.
+gripper, feeding line, box factory, demo), always visible, then one tab per
+area - Robot (jog/gripper, demo run/pause/restart), Camera (live gripper-camera colour/depth feed,
+<namespace>/camera/color|depth from group_a_bringup's camera_bridge, or the last vision
+box_pose_estimator result with its detections drawn), Line &
+Belts (feeding line + conveyor speeds) and Boxes (factory + spawn). Panels in
+a tab re-flow into columns with the window width. Controls are sized for
+touch.
 
 Robot: hold-to-jog - press and hold a joint's -/+ button to move it at the
 selected speed (5-50% of its max velocity), release to stop. The joint
@@ -58,17 +62,18 @@ import sys
 import time
 from typing import Optional
 
+import numpy as np
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from builtin_interfaces.msg import Duration
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.parameter_client import AsyncParameterClient
-from rclpy.qos import DurabilityPolicy, QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import String
 from std_msgs.msg import Float64
 from std_srvs.srv import SetBool, Trigger
@@ -193,6 +198,25 @@ class TeleopNode(Node):
             self.create_subscription(GripperState, f'/{ns}/gripper/state',
                                      lambda msg, ns=ns: self.gripper_states.__setitem__(ns, msg), latched)
 
+        # Gripper camera (group_a_bringup's camera_bridge): only the latest
+        # frame is kept; the Camera tab converts it to a QImage on its own
+        # tick, and only while visible.
+        self.declare_parameter('camera_color_topic', 'camera/color')
+        self.declare_parameter('camera_depth_topic', 'camera/depth')
+        # vision's box_pose_estimator overlay (latched, one image per estimate)
+        self.declare_parameter('camera_detections_topic', 'box_pose_estimator/debug_image')
+        self.camera_frames: dict[tuple[str, str], Image] = {}
+        self.camera_stamps: dict[tuple[str, str], list[float]] = {}
+        self.camera_topics = {'color': self.get_parameter('camera_color_topic').value,
+                              'depth': self.get_parameter('camera_depth_topic').value,
+                              'detections': self.get_parameter('camera_detections_topic').value}
+        latched_image = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        for ns in self.robot_namespaces:
+            for kind, topic in self.camera_topics.items():
+                self.create_subscription(Image, f'/{ns}/{topic}',
+                                         lambda msg, key=(ns, kind): self._on_camera(key, msg),
+                                         latched_image if kind == 'detections' else qos_profile_sensor_data)
+
         # Workcell status strip: sim clock (real-time factor), demo state and
         # which servers exist (polled from the ROS graph, 1 Hz).
         self.sim_rtf: Optional[float] = None
@@ -213,10 +237,19 @@ class TeleopNode(Node):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._line_enable_client = self.create_client(SetBool, f'/{line_ns}/line/set_enabled')
         self._line_release_client = self.create_client(Trigger, f'/{line_ns}/line/release')
+        # Pick & place demo (workcell_demo) controls.
+        self._demo_enable_client = self.create_client(SetBool, '/workcell_demo/set_enabled')
+        self._demo_restart_client = self.create_client(Trigger, '/workcell_demo/restart')
 
     def _on_joint_state(self, ns: str, msg: JointState) -> None:
         self._joint_states[ns] = msg
         self.joint_state_stamp[ns] = time.monotonic()
+
+    def _on_camera(self, key: tuple[str, str], msg: Image) -> None:
+        self.camera_frames[key] = msg
+        stamps = self.camera_stamps.setdefault(key, [])
+        stamps.append(time.monotonic())
+        del stamps[:-20]  # last 20 arrivals, for the rate readout
 
     def _on_clock(self, msg: Clock) -> None:
         now = time.monotonic()
@@ -248,7 +281,7 @@ class TeleopNode(Node):
         """Non-blocking service call; on_done(ok, message) runs from the ROS
         spin in the Qt thread."""
         if not client.service_is_ready():
-            on_done(False, f'{client.srv_name} unavailable (infeed_line.launch.py not running?)')
+            on_done(False, f'{client.srv_name} unavailable (is its node running?)')
             return
 
         def _done(fut):
@@ -265,6 +298,12 @@ class TeleopNode(Node):
 
     def release_line(self, on_done) -> None:
         self._call_async(self._line_release_client, Trigger.Request(), on_done)
+
+    def set_demo_enabled(self, enabled: bool, on_done) -> None:
+        self._call_async(self._demo_enable_client, SetBool.Request(data=bool(enabled)), on_done)
+
+    def restart_demo(self, on_done) -> None:
+        self._call_async(self._demo_restart_client, Trigger.Request(), on_done)
 
     def current_joint_positions(self, robot_ns: str) -> Optional[list[float]]:
         """The robot's actual joint positions in robot_joint_names order, or
@@ -898,6 +937,64 @@ class InfeedLinePanel(QtWidgets.QGroupBox):
         self.node.release_line(self._report)
 
 
+class DemoPanel(QtWidgets.QGroupBox):
+    """Pick & place demo (workcell_demo): its live ~/state, run/pause, and
+    Restart - abort the running cycle, suction off, go home, clear any ERROR
+    and run again (the demo's ~/restart service)."""
+    _LEVELS = {'ERROR': 'bad', 'WAITING': 'ok', 'DISABLED': 'off', 'STARTING': 'warn'}
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__('Pick & Place Demo', parent)
+        self.node = node
+        self.state_label = QtWidgets.QLabel()
+        self.state_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.detail_label = QtWidgets.QLabel()
+        self.detail_label.setWordWrap(True)
+        self.run_btn = QtWidgets.QPushButton('Pause')
+        self.run_btn.setToolTip('Pause / run the demo (a running cycle finishes first)')
+        self.run_btn.clicked.connect(self._on_run_clicked)
+        self.restart_btn = QtWidgets.QPushButton('Restart')
+        self.restart_btn.setToolTip('Abort the running cycle, suction off, go home, clear ERROR and run again')
+        self.restart_btn.clicked.connect(self._on_restart_clicked)
+        self.status_label = QtWidgets.QLabel('')
+        self.status_label.setWordWrap(True)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.run_btn)
+        buttons.addWidget(self.restart_btn)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(self.state_label)
+        layout.addWidget(self.detail_label)
+        layout.addLayout(buttons)
+        layout.addWidget(self.status_label)
+        self.refresh()
+
+    def refresh(self) -> None:
+        up = self.node.has_service('/workcell_demo/restart')
+        text = self.node.demo_state if up else None
+        state, _, detail = (text or '').partition('|')
+        state = state.strip()
+        if not up:
+            state, detail = 'NOT RUNNING', 'start it: ros2 launch workcell_demo demo.launch.py'
+        level = self._LEVELS.get(state, 'busy') if up else 'off'
+        self.state_label.setText(f'<b>{state or "?"}</b>')
+        self.state_label.setStyleSheet(f'background-color: {STATUS_COLORS[level]}; color: white; '
+                                       f'border-radius: 6px; padding: 6px;')
+        self.detail_label.setText(detail.strip())
+        self.run_btn.setText('Run' if state == 'DISABLED' else 'Pause')
+        for btn in (self.run_btn, self.restart_btn):
+            btn.setEnabled(up)
+
+    def _report(self, ok: bool, message: str) -> None:
+        self.status_label.setText(message if ok else f'<span style="color:#c62828">{message}</span>')
+
+    def _on_run_clicked(self) -> None:
+        self.node.set_demo_enabled(self.run_btn.text() == 'Run', self._report)
+
+    def _on_restart_clicked(self) -> None:
+        self.node.restart_demo(self._report)
+
+
 class FlowLayout(QtWidgets.QLayout):
     """Left-to-right layout that wraps onto new lines (Qt's flow layout example)."""
 
@@ -1100,6 +1197,105 @@ class ConveyorsPanel(QtWidgets.QGroupBox):
             layout.addWidget(row)
 
 
+def image_to_qimage(msg: Image, depth_range: tuple[float, float]) -> Optional[QtGui.QImage]:
+    """sensor_msgs/Image -> QImage (copied, owns its data). Depth (32FC1 metres
+    / 16UC1 millimetres) is shown as grey, near = bright, far = dark grey,
+    clipped to depth_range; invalid pixels (nan/inf/0) are black."""
+    w, h, enc = msg.width, msg.height, msg.encoding
+    if w == 0 or h == 0:
+        return None
+    if enc in ('rgb8', 'bgr8'):
+        img = QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_RGB888)
+        return img.rgbSwapped() if enc == 'bgr8' else img.copy()
+    if enc in ('rgba8', 'bgra8'):
+        img = QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_RGBA8888)
+        return img.rgbSwapped() if enc == 'bgra8' else img.copy()
+    if enc == 'mono8':
+        return QtGui.QImage(bytes(msg.data), w, h, msg.step, QtGui.QImage.Format_Grayscale8).copy()
+    if enc in ('32FC1', '16UC1'):
+        dtype, scale = (np.float32, 1.0) if enc == '32FC1' else (np.uint16, 1e-3)
+        depth = np.frombuffer(bytes(msg.data), dtype=dtype).reshape(h, msg.step // np.dtype(dtype).itemsize)[:, :w]
+        depth = depth.astype(np.float32) * scale
+        near, far = depth_range
+        valid = np.isfinite(depth) & (depth > 0.0)
+        grey = np.zeros((h, w), dtype=np.uint8)
+        # 255 (near) .. 40 (far), so black stays reserved for "no reading".
+        t = (np.clip(depth[valid], near, far) - near) / (far - near)
+        grey[valid] = (255.0 - 215.0 * t).astype(np.uint8)
+        return QtGui.QImage(grey.tobytes(), w, h, w, QtGui.QImage.Format_Grayscale8).copy()
+    return None
+
+
+class CameraPanel(QtWidgets.QWidget):
+    """Live gripper-camera feed (colour or depth) of one robot. Converts the
+    node's latest frame on its own timer, and only while it is on screen."""
+    STALE_SEC = 2.0
+    DEPTH_RANGE = (0.10, 3.0)  # Gazebo sensor clip planes (group_a_macro.xacro)
+
+    def __init__(self, node: 'TeleopNode', parent=None):
+        super().__init__(parent)
+        self.node = node
+        self._shown_stamp = None
+
+        self.robot = QtWidgets.QComboBox()
+        self.robot.addItems(node.robot_namespaces)
+        self.robot.setVisible(len(node.robot_namespaces) > 1)
+        self.kind = QtWidgets.QComboBox()
+        self.kind.addItems(['color', 'depth', 'detections'])
+        self.kind.setToolTip('detections = the last box_pose_estimator result (updated on every ~/detect)')
+        self.info = QtWidgets.QLabel('-')
+        bar = QtWidgets.QHBoxLayout()
+        bar.addWidget(self.robot)
+        bar.addWidget(self.kind)
+        bar.addWidget(self.info, 1)
+
+        self.view = QtWidgets.QLabel('waiting for camera...')
+        self.view.setAlignment(QtCore.Qt.AlignCenter)
+        self.view.setMinimumSize(320, 240)
+        self.view.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+        self.view.setStyleSheet('background-color: black; color: #bdbdbd;')
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(bar)
+        layout.addWidget(self.view, 1)
+
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(100)  # the Gazebo camera publishes at 10 Hz
+
+    def refresh(self) -> None:
+        if not self.isVisible():
+            return
+        key = (self.robot.currentText(), self.kind.currentText())
+        topic = f'/{key[0]}/{self.node.camera_topics[key[1]]}'
+        stamps = self.node.camera_stamps.get(key, [])
+        # Detections arrive once per estimate, so an old one is still the latest result.
+        live = key[1] != 'detections'
+        if not stamps or (live and time.monotonic() - stamps[-1] > self.STALE_SEC):
+            self.view.setText(f'no images on {topic}' if live else
+                              f'no detections yet - run {topic.rsplit("/", 1)[0]}/detect '
+                              f'(vision box_pose.launch.py)')
+            self.info.setText(topic)
+            self._shown_stamp = None
+            return
+        if not live:
+            self.info.setText(f'{topic}  last estimate {time.monotonic() - stamps[-1]:.0f} s ago')
+        msg = self.node.camera_frames[key]
+        stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        if stamp == self._shown_stamp:
+            return
+        img = image_to_qimage(msg, self.DEPTH_RANGE)
+        if img is None:
+            self.view.setText(f'unsupported encoding {msg.encoding!r} on {topic}')
+            return
+        self._shown_stamp = stamp
+        self.view.setPixmap(QtGui.QPixmap.fromImage(img).scaled(
+            self.view.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        if live:
+            rate = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 and stamps[-1] > stamps[0] else 0.0
+            self.info.setText(f'{topic}  {msg.width}x{msg.height} {msg.encoding}  {rate:.1f} Hz')
+
+
 APP_STYLE = """
 QWidget { font-size: 11pt; }
 QGroupBox { font-weight: bold; border: 1px solid #9e9e9e; border-radius: 6px; margin-top: 10px; padding-top: 6px; }
@@ -1122,23 +1318,26 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         self._robot_panels = [RobotPanel(node, ns) for ns in node.robot_namespaces]
         self._line_panel = InfeedLinePanel(node)
         self._factory_panel = FactoryPanel(node.configure_factory)
-        panels = [*self._robot_panels, self._line_panel, self._factory_panel,
-                  ConveyorsPanel(node, self._on_conveyor_changed),
-                  SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z)]
+        self._demo_panel = DemoPanel(node)
 
+        # Status strip on top (always visible), one tab per area below it.
         self._banner = StatusBanner(node)
-        body = ResponsiveColumns(panels)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        scroll.setWidget(body)
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            [*self._robot_panels, self._demo_panel], max_columns=2)), 'Robot')
+        self.tabs.addTab(CameraPanel(node), 'Camera')
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            [self._line_panel, ConveyorsPanel(node, self._on_conveyor_changed)], max_columns=2)), 'Line && Belts')
+        self.tabs.addTab(self._scrolled(ResponsiveColumns(
+            [self._factory_panel, SpawnPanel(self._on_spawn_box, node.spawn_x, node.spawn_y, node.spawn_z)],
+            max_columns=2)), 'Boxes')
 
         central = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(central)
         outer.setContentsMargins(6, 6, 6, 6)
         outer.addWidget(self._banner)
-        outer.addWidget(scroll, 1)
+        outer.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
         # ROS spins in the Qt thread: drain every ready callback each tick
@@ -1151,11 +1350,20 @@ class TeleopMainWindow(QtWidgets.QMainWindow):
         self._graph_timer.start(1000)
         self.node.poll_graph()
 
+    @staticmethod
+    def _scrolled(widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
+
     def _on_ros_tick(self) -> None:
         for _ in range(50):
             rclpy.spin_once(self.node, timeout_sec=0)
         self._banner.refresh()
         self._line_panel.refresh()
+        self._demo_panel.refresh()
         fresh = time.monotonic() - self.node.factory_status_stamp < 3.0
         self._factory_panel.refresh(self.node.factory_status if fresh else None)
         for panel in self._robot_panels:

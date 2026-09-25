@@ -25,6 +25,15 @@
   gz_type_name: "gz.msgs.CameraInfo"
   direction: GZ_TO_ROS
 
+# ── Gripper force pad (force_torque sensor, group_a_macro.xacro) ──────────────
+# Raw: force_sensor.py re-stamps it (frame_id gripper_force_sensor_link) onto
+# /<ns>/gripper/wrench and derives /<ns>/gripper/contact.
+- ros_topic_name: "/$(var namespace)/gripper/force_torque_raw"
+  gz_topic_name: "/$(var namespace)/gripper/force_torque_raw"
+  ros_type_name: "geometry_msgs/msg/WrenchStamped"
+  gz_type_name: "gz.msgs.Wrench"
+  direction: GZ_TO_ROS
+
 # ── Odometry (from PosePublisher plugin) ───────────────────────────────────────
 
 - ros_topic_name: "/$(var namespace)/pose"

@@ -1,8 +1,11 @@
+# Camera topics per nvblox camera slot (index i -> camera_i), relative to the
+# robot namespace passed as nvblox.launch.py's robot_namespace:=<ns>
+# (published by group_a_bringup's camera_bridge, see gz_bridge.yaml).
+# The Gazebo depth and rgb sensors share one intrinsics topic (same FOV and
+# resolution, same camera_optical_frame), so both *_info entries point to it.
 /**:
   ros__parameters:
-    robot_name: "robot_1"
-    depth_image_topics: ["robot_1/camera/depth"]
-    depth_info_topics: ["robot_1/camera/camera_info"]
-    color_image_topics: ["robot_1/camera/color"]
-    color_info_topics: ["robot_1/camera/camera_info"]
-    pose_topics: ["robot_1/pose"]
+    depth_image_topics: ["camera/depth"]
+    depth_info_topics: ["camera/camera_info"]
+    color_image_topics: ["camera/color"]
+    color_info_topics: ["camera/camera_info"]

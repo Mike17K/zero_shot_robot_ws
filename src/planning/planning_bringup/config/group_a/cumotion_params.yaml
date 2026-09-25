@@ -9,10 +9,13 @@
     interpolation_dt: 0.05
 
     # ESDF/World configuration
+    # No nvblox ESDF (VRAM on the 4GB card): cuMotion's world is the static
+    # primitive scene (moveit_collision_objects_scene_file below, generated
+    # from workcell_bringup/layout.py when empty) plus each MotionPlan
+    # request's own `world` collision objects (perceived pallets/boxes).
     read_esdf_world: false
     update_esdf_on_request: false
-    esdf_service_name: ""
-    # "/nvblox_node/get_esdf_and_gradient"
+    esdf_service_name: /nvblox_node/get_esdf_and_gradient # unused while read_esdf_world is false
 
     # Visualization
     publish_world_collision_spheres: true
@@ -42,4 +45,6 @@
     # Static planning scene
     static_scene_service_max_wait_attempts: 30
     static_planning_scene_service_name: "publish_static_planning_scene"
+    # "" -> cumotion.launch.py generates it from workcell_bringup/layout.py
+    # (collision_scene.py, in the robot's base frame); a .scene path overrides.
     moveit_collision_objects_scene_file: ""

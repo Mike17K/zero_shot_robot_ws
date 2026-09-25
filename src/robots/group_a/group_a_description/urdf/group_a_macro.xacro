@@ -27,11 +27,9 @@
                     <color rgba="0.05 0.05 0.05 1.0" />
                 </material>
             </visual>
-            <collision>
-                <geometry>
-                    <cylinder radius="${radius}" length="${length}" />
-                </geometry>
-            </collision>
+            <!-- No collision: the force-sensor pad in front of the cup tips
+                 (gripper_force_sensor_link) is the gripper's contact surface,
+                 so every contact force goes through the sensor. -->
             <inertial>
                 <!-- Tiny/negligible next to the plate or the arm - solid
                      cylinder inertia, m=0.01kg, kept non-zero/non-singular. -->
@@ -249,18 +247,53 @@
             col_spacing="${cup_spacing}" row_spacing="${cup_spacing}"
             cup_z="${cup_z}" radius="${cup_radius}" length="${cup_length}" />
 
-        <!-- Tool-center-point: massless reference frame at the cup grid's
-             own tip (centered in X/Y, at the cups' outer face) - what
-             planning should actually target, since gp_tool0 now sits behind
-             the whole plate+cup stack rather than at the gripper's working
-             point. Used as planning_bringup/config/group_a/group_a.xrdf's
-             tool_frames and combined_system.srdf.xacro's "manipulator"
-             group's chain tip_link. -->
+        <!-- === Force sensor pad ──────────────────────────────────────────────
+             A thin rectangle covering the WHOLE gripper face (plate size),
+             directly in front of the cup tips - the gripper's only contact
+             surface (cups and camera stay behind it, collision-free / flush).
+             It hangs off the plate on its own fixed joint, which Gazebo keeps
+             (preserveFixedJoint) and measures with a force_torque sensor (see
+             the Gazebo block below): whatever the pad presses against shows up
+             as the wrench on /<namespace>/gripper/wrench. Collision only, no
+             visual, so the gripper camera sees straight through it. -->
+        <xacro:property name="force_pad_thickness" value="0.005" />
+        <xacro:property name="cup_tip_z" value="${cup_z + cup_length / 2.0}" />
+
+        <link name="gripper_force_sensor_link">
+            <collision>
+                <origin xyz="0 0 ${force_pad_thickness / 2.0}" rpy="0 0 0" />
+                <geometry>
+                    <box size="${gripper_plate_width} ${gripper_plate_length} ${force_pad_thickness}" />
+                </geometry>
+            </collision>
+            <inertial>
+                <mass value="0.05" />
+                <origin xyz="0 0 ${force_pad_thickness / 2.0}" rpy="0 0 0" />
+                <inertia
+                    ixx="${0.05 * (gripper_plate_length * gripper_plate_length + force_pad_thickness * force_pad_thickness) / 12.0}"
+                    ixy="0.0" ixz="0.0"
+                    iyy="${0.05 * (gripper_plate_width * gripper_plate_width + force_pad_thickness * force_pad_thickness) / 12.0}"
+                    iyz="0.0"
+                    izz="${0.05 * (gripper_plate_width * gripper_plate_width + gripper_plate_length * gripper_plate_length) / 12.0}" />
+            </inertial>
+        </link>
+        <joint name="gripper_force_sensor_joint" type="fixed">
+            <parent link="gripper_plate_link" />
+            <child link="gripper_force_sensor_link" />
+            <origin xyz="0 0 ${cup_tip_z}" rpy="0 0 0" />
+        </joint>
+
+        <!-- Tool-center-point: massless reference frame on the force pad's
+             outer face (centered in X/Y) - where the gripper touches things,
+             so what planning should actually target, since gp_tool0 sits
+             behind the whole plate+cup+pad stack. Used as planning_bringup/
+             config/group_a/group_a.xrdf's tool_frames and
+             combined_system.srdf.xacro's "manipulator" group's chain tip_link. -->
         <link name="gripper_tcp" />
         <joint name="gripper_tcp_joint" type="fixed">
             <parent link="gripper_plate_link" />
             <child link="gripper_tcp" />
-            <origin xyz="0 0 ${cup_z + cup_length / 2.0}" rpy="0 0 0" />
+            <origin xyz="0 0 ${cup_tip_z + force_pad_thickness}" rpy="0 0 0" />
         </joint>
 
         <!-- === Camera at the gripper's edge ───────────────────────────────────
@@ -269,25 +302,22 @@
              facing like the suction cups": same Z (protrusion) direction as
              the cups, just not in the middle of the array.
 
-             camera_joint yaws the camera body 90° about Z first: the camera
-             box is 0.040 x 0.095 (not square), and mounted at its default
-             orientation its LONG (0.095) side would face along plate-Y -
-             straight toward the cup grid's last row, with no room left to
-             clear it inside a 0.40-long plate (checked: -2.5cm of actual
-             overlap). Yawing about Z doesn't touch the Z axis itself, so it
-             doesn't affect "which way the camera looks" (still gp_tool0's
-             own Z, same as the cups) - it only swaps which box dimension
-             faces the edge, so the SHORT (0.040) side does instead, needing
-             far less edge clearance. -->
+             Gazebo camera sensors look along their link's +X axis (not Z),
+             so camera_joint rotates camera_link to map: X -> plate +Z (the
+             cup/approach direction, i.e. "down" when the tool faces down),
+             Y -> plate +X, Z -> plate +Y. The box is sized per camera_link's
+             own axes to match: 0.030 deep along the view axis (plate face to
+             exactly the cup tips, i.e. behind the force pad), 0.095 across the plate width, and only 0.040
+             along plate-Y so it clears the cup grid's last row at the edge. -->
         <xacro:property name="cup_last_row_edge_y" value="${-cup_row0_y + cup_radius}" />
         <xacro:property name="camera_gap" value="0.02" /> <!-- clearance from the nearest cup -->
         <xacro:property name="camera_y" value="${cup_last_row_edge_y + camera_gap + 0.040 / 2.0}" />
-        <xacro:property name="camera_z" value="${gripper_plate_thickness + 0.020}" />
+        <xacro:property name="camera_z" value="${gripper_plate_thickness + 0.030 / 2.0}" />
 
         <link name="camera_link">
             <visual>
                 <geometry>
-                    <box size="0.040 0.095 0.030" />
+                    <box size="0.030 0.095 0.040" />
                 </geometry>
                 <material name="dark_grey">
                     <color rgba="0.15 0.15 0.15 1.0" />
@@ -295,7 +325,7 @@
             </visual>
             <collision>
                 <geometry>
-                    <box size="0.040 0.095 0.030" />
+                    <box size="0.030 0.095 0.040" />
                 </geometry>
             </collision>
             <inertial>
@@ -308,14 +338,12 @@
         <joint name="camera_joint" type="fixed">
             <parent link="gripper_plate_link" />
             <child link="camera_link" />
-            <origin xyz="0 ${camera_y} ${camera_z}" rpy="0 0 ${pi/2}" />
+            <origin xyz="0 ${camera_y} ${camera_z}" rpy="0 ${-pi/2} ${-pi/2}" />
         </joint>
 
-        <!-- Optical frame - identical rotation to before: camera_link's own
-             axes are still unrotated relative to its parent's (gp_tool0
-             before, gripper_plate_link now), and that parent's Z axis is
-             still gp_tool0's own Z axis either way, so this still points
-             the optical Z axis the same direction as the suction cups. -->
+        <!-- Optical frame - standard REP-103 camera_link (X forward) ->
+             optical (Z forward, X right, Y down) rotation, so optical Z is
+             camera_link X, i.e. the same direction as the suction cups. -->
         <link name="camera_optical_frame" />
         <joint name="camera_optical_joint" type="fixed">
             <parent link="camera_link" />
@@ -354,6 +382,25 @@
                     <use_pose_vector_msg>true</use_pose_vector_msg>
                     <update_frequency>50</update_frequency>
                 </plugin>
+            </gazebo>
+
+            <!-- Force/torque on the force pad's joint: the wrench the pad
+                 (child) exerts on the plate, in the pad's own axes (+Z out of
+                 the gripper). Needs the world's gz-sim-forcetorque-system
+                 (workcell_world.sdf); bridged + re-stamped by group_a_bringup's
+                 force_sensor.py to /<namespace>/gripper/wrench. -->
+            <gazebo reference="gripper_force_sensor_joint">
+                <preserveFixedJoint>true</preserveFixedJoint>
+                <sensor name="gripper_force_torque" type="force_torque">
+                    <always_on>1</always_on>
+                    <update_rate>100</update_rate>
+                    <visualize>false</visualize>
+                    <topic>${namespace}/gripper/force_torque_raw</topic>
+                    <force_torque>
+                        <frame>child</frame>
+                        <measure_direction>child_to_parent</measure_direction>
+                    </force_torque>
+                </sensor>
             </gazebo>
 
             <!-- Replace the single rgbd_camera sensor with two sensors: depth + rgb -->

@@ -5,8 +5,9 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /nvblox1/color layer marker1
+        - /Image1
       Splitter Ratio: 0.4593496024608612
-    Tree Height: 487
+    Tree Height: 232
   - Class: rviz_common/Views
     Expanded:
       - /Current View1
@@ -40,87 +41,59 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        map:
+        camera_link:
           Value: true
-        robot_1/camera_link:
+        camera_optical_frame:
           Value: true
-        robot_1/camera_optical_frame:
+        gp_base:
           Value: true
-        robot_1/lift_base_link:
+        gp_base_link:
           Value: true
-        robot_1/lift_lower_link:
+        gp_flange:
           Value: true
-        robot_1/lift_mount:
+        gp_link_1:
           Value: true
-        robot_1/lift_mount_link:
+        gp_link_2:
           Value: true
-        robot_1/lift_plate_link:
+        gp_link_3:
           Value: true
-        robot_1/lift_upper_link:
+        gp_link_4:
           Value: true
-        robot_1/ur_base:
+        gp_link_5:
           Value: true
-        robot_1/ur_base_link:
+        gp_link_6:
           Value: true
-        robot_1/ur_base_link_inertia:
+        gp_tool0:
           Value: true
-        robot_1/ur_flange:
+        gripper_force_sensor_link:
           Value: true
-        robot_1/ur_forearm_link:
+        gripper_plate_link:
           Value: true
-        robot_1/ur_ft_frame:
+        gripper_tcp:
           Value: true
-        robot_1/ur_shoulder_link:
+        suction_cup_10_link:
           Value: true
-        robot_1/ur_tool0:
+        suction_cup_11_link:
           Value: true
-        robot_1/ur_upper_arm_link:
+        suction_cup_12_link:
           Value: true
-        robot_1/ur_wrist_1_link:
+        suction_cup_1_link:
           Value: true
-        robot_1/ur_wrist_2_link:
+        suction_cup_2_link:
           Value: true
-        robot_1/ur_wrist_3_link:
+        suction_cup_3_link:
           Value: true
-        robot_2/camera_link:
+        suction_cup_4_link:
           Value: true
-        robot_2/camera_optical_frame:
+        suction_cup_5_link:
           Value: true
-        robot_2/lift_base_link:
+        suction_cup_6_link:
           Value: true
-        robot_2/lift_lower_link:
+        suction_cup_7_link:
           Value: true
-        robot_2/lift_mount:
+        suction_cup_8_link:
           Value: true
-        robot_2/lift_mount_link:
-          Value: true
-        robot_2/lift_plate_link:
-          Value: true
-        robot_2/lift_upper_link:
-          Value: true
-        robot_2/ur_base:
-          Value: true
-        robot_2/ur_base_link:
-          Value: true
-        robot_2/ur_base_link_inertia:
-          Value: true
-        robot_2/ur_flange:
-          Value: true
-        robot_2/ur_forearm_link:
-          Value: true
-        robot_2/ur_ft_frame:
-          Value: true
-        robot_2/ur_shoulder_link:
-          Value: true
-        robot_2/ur_tool0:
-          Value: true
-        robot_2/ur_upper_arm_link:
-          Value: true
-        robot_2/ur_wrist_1_link:
-          Value: true
-        robot_2/ur_wrist_2_link:
-          Value: true
-        robot_2/ur_wrist_3_link:
+        suction_cup_9_link:
           Value: true
         world:
           Value: true
@@ -131,54 +104,49 @@ Visualization Manager:
       Show Names: false
       Tree:
         world:
-          map:
-            {}
-          robot_1/lift_plate_link:
-            robot_1/lift_base_link:
-              robot_1/lift_lower_link:
-                robot_1/lift_upper_link:
-                  robot_1/lift_mount_link:
-                    robot_1/lift_mount:
-                      robot_1/ur_base_link:
-                        robot_1/ur_base:
-                          {}
-                        robot_1/ur_base_link_inertia:
-                          robot_1/ur_shoulder_link:
-                            robot_1/ur_upper_arm_link:
-                              robot_1/ur_forearm_link:
-                                robot_1/ur_wrist_1_link:
-                                  robot_1/ur_wrist_2_link:
-                                    robot_1/ur_wrist_3_link:
-                                      robot_1/ur_flange:
-                                        robot_1/ur_tool0:
-                                          robot_1/camera_link:
-                                            robot_1/camera_optical_frame:
-                                              {}
-                                      robot_1/ur_ft_frame:
-                                        {}
-          robot_2/lift_plate_link:
-            robot_2/lift_base_link:
-              robot_2/lift_lower_link:
-                robot_2/lift_upper_link:
-                  robot_2/lift_mount_link:
-                    robot_2/lift_mount:
-                      robot_2/ur_base_link:
-                        robot_2/ur_base:
-                          {}
-                        robot_2/ur_base_link_inertia:
-                          robot_2/ur_shoulder_link:
-                            robot_2/ur_upper_arm_link:
-                              robot_2/ur_forearm_link:
-                                robot_2/ur_wrist_1_link:
-                                  robot_2/ur_wrist_2_link:
-                                    robot_2/ur_wrist_3_link:
-                                      robot_2/ur_flange:
-                                        robot_2/ur_tool0:
-                                          robot_2/camera_link:
-                                            robot_2/camera_optical_frame:
-                                              {}
-                                      robot_2/ur_ft_frame:
-                                        {}
+          gp_base_link:
+            gp_base:
+              {}
+            gp_link_1:
+              gp_link_2:
+                gp_link_3:
+                  gp_link_4:
+                    gp_link_5:
+                      gp_link_6:
+                        gp_flange:
+                          gp_tool0:
+                            gripper_plate_link:
+                              camera_link:
+                                camera_optical_frame:
+                                  {}
+                              gripper_force_sensor_link:
+                                {}
+                              gripper_tcp:
+                                {}
+                              suction_cup_10_link:
+                                {}
+                              suction_cup_11_link:
+                                {}
+                              suction_cup_12_link:
+                                {}
+                              suction_cup_1_link:
+                                {}
+                              suction_cup_2_link:
+                                {}
+                              suction_cup_3_link:
+                                {}
+                              suction_cup_4_link:
+                                {}
+                              suction_cup_5_link:
+                                {}
+                              suction_cup_6_link:
+                                {}
+                              suction_cup_7_link:
+                                {}
+                              suction_cup_8_link:
+                                {}
+                              suction_cup_9_link:
+                                {}
       Update Interval: 0
       Value: true
     - Acceleration_Scaling_Factor: 0.1
@@ -212,95 +180,132 @@ Visualization Manager:
           Expand Link Details: false
           Expand Tree: false
           Link Tree Style: Links in Alphabetic Order
-          robot_1/camera_link:
+          camera_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/camera_optical_frame:
+          camera_optical_frame:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-          robot_1/lift_base_link:
+          gp_base:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-            Value: true
-          robot_1/lift_lower_link:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-            Value: true
-          robot_1/lift_mount:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/lift_mount_link:
+          gp_base_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/lift_plate_link:
+          gp_flange:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gp_link_1:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/lift_upper_link:
+          gp_link_2:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_base:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_base_link:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_base_link_inertia:
+          gp_link_3:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_flange:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_forearm_link:
+          gp_link_4:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_ft_frame:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_shoulder_link:
+          gp_link_5:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_tool0:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_upper_arm_link:
+          gp_link_6:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_1_link:
+          gp_tool0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gripper_force_sensor_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_2_link:
+          gripper_plate_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_3_link:
+          gripper_tcp:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          suction_cup_10_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_11_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_12_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_1_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_2_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_3_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_4_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_5_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_6_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_7_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_8_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_9_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -332,7 +337,7 @@ Visualization Manager:
         Goal State Color: 250; 128; 0
         Interactive Marker Size: 0
         Joint Violation Color: 255; 0; 255
-        Planning Group: all
+        Planning Group: manipulator
         Query Goal State: true
         Query Start State: false
         Show Workspace: false
@@ -355,95 +360,132 @@ Visualization Manager:
           Expand Link Details: false
           Expand Tree: false
           Link Tree Style: Links in Alphabetic Order
-          robot_1/camera_link:
+          camera_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/camera_optical_frame:
+          camera_optical_frame:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-          robot_1/lift_base_link:
+          gp_base:
             Alpha: 1
             Show Axes: false
             Show Trail: false
-            Value: true
-          robot_1/lift_lower_link:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-            Value: true
-          robot_1/lift_mount:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/lift_mount_link:
+          gp_base_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/lift_plate_link:
+          gp_flange:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gp_link_1:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/lift_upper_link:
+          gp_link_2:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_base:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_base_link:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_base_link_inertia:
+          gp_link_3:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_flange:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_forearm_link:
+          gp_link_4:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_ft_frame:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_shoulder_link:
+          gp_link_5:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_tool0:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
-          robot_1/ur_upper_arm_link:
+          gp_link_6:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_1_link:
+          gp_tool0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          gripper_force_sensor_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_2_link:
+          gripper_plate_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
-          robot_1/ur_wrist_3_link:
+          gripper_tcp:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+          suction_cup_10_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_11_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_12_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_1_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_2_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_3_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_4_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_5_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_6_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_7_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_8_link:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
+            Value: true
+          suction_cup_9_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -579,7 +621,7 @@ Visualization Manager:
         Show Robot Visual: true
       Value: false
     - Class: rviz_default_plugins/MarkerArray
-      Enabled: true
+      Enabled: false
       Name: MarkerArray
       Namespaces:
         {}
@@ -588,8 +630,8 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /cumotion/collision_spheres
-      Value: true
+        Value: /robot_1/cumotion/collision_spheres
+      Value: false
     - Class: rviz_default_plugins/MarkerArray
       Enabled: false
       Name: CollisionSpheres
@@ -602,10 +644,8 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /robot_1/cumotion/collision_spheres
       Value: false
-    - Ceiling Height: 1.5
-      Class: nvblox_rviz_plugin/NvbloxMesh
-      Cut Ceiling: false
-      Enabled: true
+    - Class: nvblox_rviz_plugin/NvbloxMesh
+      Enabled: false
       Name: NvbloxMesh
       Topic:
         Depth: 5
@@ -614,6 +654,20 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /nvblox_node/mesh
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Image
+      Normalize Range: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /robot_1/box_pose_estimator/debug_image
       Value: true
   Enabled: true
   Global Options:
@@ -642,29 +696,31 @@ Visualization Manager:
       Lock Camera: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5650012493133545
+      Pitch: 0.10000114887952805
       Point towards: -z axis
       Position:
-        X: -2.2921314239501953
-        Y: -2.705357789993286
-        Z: 3.6049365997314453
+        X: -3.936615467071533
+        Y: 2.017582416534424
+        Z: 1.1477892398834229
       Target Frame: <Fixed Frame>
       Value: FrameAligned (rviz_default_plugins)
-      Yaw: 0.6566004753112793
+      Yaw: 5.899784564971924
     Saved: ~
 Window Geometry:
   Displays:
     collapsed: false
-  Height: 1011
+  Height: 933
   Hide Left Dock: false
   Hide Right Dock: false
+  Image:
+    collapsed: false
   MotionPlanning:
     collapsed: false
   MotionPlanning - Trajectory Slider:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000200000000000002b70000039dfc0200000006fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000003f00fffffffb000000100044006900730070006c006100790073010000003b00000222000000c700fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000263000001750000016a00fffffffb0000000a00560069006500770073000000032b000000a9000000a000fffffffb0000000c00430061006d006500720061000000035c000000780000000000000000fb0000000a0049006d00610067006500000003bd000000170000000000000000000000010000014000000395fc0200000001fb0000000a0049006d006100670065010000003f000003950000000000000000000004810000039d00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000200000000000002b70000034ffc0200000007fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000003f00fffffffb000000100044006900730070006c006100790073010000003b00000123000000c700fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000164000001690000016900fffffffb0000000a00560069006500770073000000032b000000a9000000a000fffffffb0000000c00430061006d006500720061000000035c000000780000000000000000fb0000000a0049006d00610067006500000003bd000000170000000000000000fb0000000a0049006d00610067006501000002d3000000b70000001600ffffff000000010000014000000395fc0200000001fb0000000a0049006d006100670065010000003f000003950000000000000000000003f80000034f00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Views:
     collapsed: false
-  Width: 1854
-  X: 559
-  Y: 222
+  Width: 1717
+  X: 199
+  Y: 156

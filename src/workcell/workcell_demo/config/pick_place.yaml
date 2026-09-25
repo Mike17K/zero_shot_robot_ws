@@ -4,12 +4,22 @@
     robot_namespace: "robot_1"
     line_namespace: "conveyor_package_infeed"
     # Pose-graph nodes (navigator_cli config/pose_graph.json) - ids or labels.
-    pick_node: "6"                  # above the box waiting at the beam
     place_nodes: ["2", "3", "4"]    # ConvaiorLeft / ConvaiorMiddle / ConvaiorRight
     place_order: "round_robin"      # or "random"
     home_node: "5"                  # InspectionPoint - idle pose
-    approach_distance: 0.10         # m, straight down before suction / up after
-    approach_speed: 0.05            # m/s
+    place_speed: 1.0                # cuMotion time dilation (0, 1] for the moves to the place nodes
+    return_speed: 1.0               # cuMotion time dilation (0, 1] for place node (2/3/4) -> home (5) after placing
+    nav_speed: 0.75                 # cuMotion time dilation (0, 1] for every other navigation (inspect, home)
+    inspect_node: "5"               # every pick starts here: vision looks from here, then goes straight to the box
+    use_vision: true                # align over the biggest detected box (vision box_pose_estimator) before the approach
+    grasp_standoff: 0.10            # m above the detected top face (along its normal) to align at
+    align_speed: 0.075              # m/s, straight line from the inspection pose to the aligned pose
+    detect_timeout: 15.0            # s for one box_pose_estimator ~/detect call
+    approach_max_distance: 0.30     # m, straight down until the force pad touches - at most this far
+    approach_speed: 0.015           # m/s, guarded move down to the box (slow: the stop on contact is a trajectory cancel)
+    contact_force: 5.0              # N, force change on the gripper pad that counts as contact
+    lift_distance: 0.30             # m, straight up with the box after the grasp
+    lift_speed: 0.075               # m/s
     grasp_wait_sec: 3.0             # wall time for gripper_manager to report the grasp
     start_enabled: true
     go_home_on_start: true

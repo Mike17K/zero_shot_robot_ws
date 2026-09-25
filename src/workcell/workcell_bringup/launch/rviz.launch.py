@@ -64,6 +64,9 @@ def generate_launch_description():
                 ("/robot_description_semantic", f"/{ns}/robot_description_semantic"),
                 ("/robot_description_planning", f"/{ns}/robot_description_planning"),
                 ("/robot_description_kinematics", f"/{ns}/robot_description_kinematics"),
+                # RViz's tf2 listener hardcodes /tf and /tf_static; follow this robot's own tree.
+                ("/tf", f"/{ns}/tf"),
+                ("/tf_static", f"/{ns}/tf_static"),
             ],
         )
 

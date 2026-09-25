@@ -29,6 +29,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'box_pose_estimator = vision.box_pose_estimator:main',
+            'box_pose_check = vision.box_pose_check:main',
         ],
     },
 )

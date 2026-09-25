@@ -17,6 +17,8 @@
   <exec_depend>group_a_description</exec_depend>
   <exec_depend>launch_param_builder</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
+  <!-- collision_scene.py: static cuMotion world generated from layout.py -->
+  <exec_depend>workcell_bringup</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

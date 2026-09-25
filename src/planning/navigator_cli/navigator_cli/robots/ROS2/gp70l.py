@@ -1,14 +1,30 @@
 """BaseRobotManager for group_a (Yaskawa GP70L + suction gripper) in this
 workspace: cuMotion plans, the joint_trajectory_controller executes, TF and
-MoveIt's compute_fk give poses. Everything is namespaced per robot."""
+MoveIt's compute_fk give poses. Everything is namespaced per robot.
+
+Short moves go in a straight line instead: cuMotion optimizes a smooth,
+collision-free path through JOINT space, which for a target a few cm away can
+still come out as a sweeping arc or a wrist flip. When the target tool pose is
+within direct_max_distance / direct_max_angle_deg of the current one, the move
+is planned as a straight tool line (MoveIt compute_cartesian_path, same as
+execute_cartesian) - the least end-effector motion there is. A joint goal only
+takes that line if it ends in the requested joint configuration (same IK
+branch); anything the line can't do falls back to cuMotion. Note the line is
+collision-checked by move_group's planning scene, not cuMotion's world boxes,
+which is why it is limited to short moves. direct_max_distance = 0 disables it.
+"""
+import math
 from typing import List, Optional, Tuple
+
+import numpy as np
+from geometry_msgs.msg import Pose
 
 from moveit_msgs.srv import GetPositionFK
 from rclpy.node import Node
 from std_srvs.srv import SetBool
 
 from shared_utils.execution import TrajectoryExecutor
-from shared_utils.geometry import TfHelper, make_pose_stamped
+from shared_utils.geometry import TfHelper, make_pose_stamped, pose_to_matrix
 from shared_utils.joint_state import JointStateCache
 from shared_utils.planning import GP70L_JOINTS, CartesianPlanner, CartesianResult, CumotionClient
 from shared_utils.ros_helpers import call_service
@@ -19,6 +35,11 @@ from ...shared.types import Point, Quaternion, TrajectoryMovementOptions
 from ..interface import BaseRobotManager, MoveGroupState, RobotPose
 
 DEFAULT_SPEED = 0.5  # cuMotion time_dilation_factor when an edge sets none
+# Short moves as a straight tool line (see the module docstring).
+DIRECT_MAX_DISTANCE = 0.30      # m of tool travel
+DIRECT_MAX_ANGLE_DEG = 60.0     # tool rotation
+DIRECT_TOOL_SPEED = 0.25        # m/s at speed 1.0 (scaled by the move's speed, like cuMotion's)
+DIRECT_JOINT_TOLERANCE = 0.05   # rad: a joint goal's line must end this close to the goal
 
 
 class Gp70lRobotManager(BaseRobotManager):
@@ -39,8 +60,15 @@ class Gp70lRobotManager(BaseRobotManager):
             node, f'/{ns}/{controller}/follow_joint_trajectory', self.joint_states)
         self._fk_client = node.create_client(GetPositionFK, f'/{ns}/compute_fk')
         self._suction_client = node.create_client(SetBool, f'/{ns}/gripper/set_suction')
+        self.direct_max_distance = self._param('direct_max_distance', DIRECT_MAX_DISTANCE)
+        self.direct_max_angle = math.radians(self._param('direct_max_angle_deg', DIRECT_MAX_ANGLE_DEG))
         Logger.INFO(f'GP70L manager on /{ns}: planner cumotion/motion_plan, '
                     f'controller {controller}, tool {tool_frame} in {world_frame}')
+
+    def _param(self, name: str, default: float) -> float:
+        if not self._node.has_parameter(name):
+            self._node.declare_parameter(name, default)
+        return float(self._node.get_parameter(name).value)
 
     # ── State ───────────────────────────────────────────────────────────────
 
@@ -85,12 +113,53 @@ class Gp70lRobotManager(BaseRobotManager):
             return False
         return self.executor.execute(result.trajectory)
 
+    def _try_direct(self, target: Pose, options, goal_joints: Optional[List[float]] = None
+                    ) -> Optional[bool]:
+        """Straight tool line to target if it is close enough. Returns the
+        execution result, or None when the line doesn't apply (cuMotion then)."""
+        if self.direct_max_distance <= 0.0:
+            return None
+        start = self.tf.frame_pose(self.world_frame, self.tool_frame)
+        if start is None:
+            return None
+        A, B = pose_to_matrix(start.pose), pose_to_matrix(target)
+        distance = float(np.linalg.norm(B[:3, 3] - A[:3, 3]))
+        cos_angle = (np.trace(A[:3, :3].T @ B[:3, :3]) - 1.0) / 2.0
+        angle = math.acos(max(-1.0, min(1.0, cos_angle)))
+        if distance > self.direct_max_distance or angle > self.direct_max_angle:
+            return None
+        if distance < 1e-3 and angle < math.radians(0.5):
+            return None  # already there (or a joint-only change): nothing to line up
+        result = self.cartesian.plan_waypoints(
+            [target], max_speed=self._speed(options) * DIRECT_TOOL_SPEED, min_fraction=0.999)
+        if not result.success:
+            Logger.INFO(f'short move: no straight line ({result.message}) - using cuMotion')
+            return None
+        if goal_joints is not None:
+            end = dict(zip(result.trajectory.joint_names, result.trajectory.points[-1].positions))
+            off = max(abs(end.get(n, math.inf) - g) for n, g in zip(self.joint_names, goal_joints))
+            if off > DIRECT_JOINT_TOLERANCE:
+                Logger.INFO(f'short move: the line ends {off:.2f} rad from the joint goal '
+                            f'(other arm configuration) - using cuMotion')
+                return None
+        Logger.INFO(f'short move: straight tool line, {distance * 100:.1f} cm / '
+                    f'{math.degrees(angle):.0f} deg')
+        return self.executor.execute(result.trajectory)
+
     def execute_joint_goal(self, group_name: str, goal: List[float],
                            options: Optional[TrajectoryMovementOptions] = None) -> bool:
         self._check_group(group_name)
         if len(goal) != len(self.joint_names):
             Logger.ERROR(f'joint goal needs {len(self.joint_names)} values, got {len(goal)}')
             return False
+        if self.direct_max_distance > 0.0:
+            ok, pos, rot = self.get_pose_from_fk(group_name, list(goal))
+            if ok:
+                target = make_pose_stamped(self.world_frame, (pos.x, pos.y, pos.z),
+                                           quat=(rot.x, rot.y, rot.z, rot.w)).pose
+                direct = self._try_direct(target, options, goal_joints=list(goal))
+                if direct is not None:
+                    return direct
         return self._plan_and_execute(
             lambda speed: self.planner.plan_to_joints(list(goal), self.joint_names,
                                                       time_dilation_factor=speed), options)
@@ -101,6 +170,9 @@ class Gp70lRobotManager(BaseRobotManager):
         state = goal.all_ee_poses[group_name]
         target = make_pose_stamped(self.world_frame, (state.pos.x, state.pos.y, state.pos.z),
                                    quat=(state.rot.x, state.rot.y, state.rot.z, state.rot.w))
+        direct = self._try_direct(target.pose, options)
+        if direct is not None:
+            return direct
         return self._plan_and_execute(
             lambda speed: self.planner.plan_to_pose(target, time_dilation_factor=speed), options)
 
@@ -109,6 +181,20 @@ class Gp70lRobotManager(BaseRobotManager):
         result = self.cartesian.plan_offset(offset, frame=frame, max_speed=max_speed)
         if not result.success:
             Logger.ERROR(f'cartesian move: {result.message}')
+            return result
+        if not self.executor.execute(result.trajectory):
+            result.success, result.message = False, 'execution failed'
+        return result
+
+    def execute_cartesian_to(self, target, max_speed: float = 0.05) -> CartesianResult:
+        """Straight-line tool move to target (PoseStamped, any TF frame),
+        position and orientation interpolated along the line. Blocking."""
+        goal = self.tf.transform_pose(target, self.world_frame)
+        if goal is None:
+            return CartesianResult(False, f'no TF {target.header.frame_id} -> {self.world_frame}')
+        result = self.cartesian.plan_waypoints([goal.pose], max_speed=max_speed)
+        if not result.success:
+            Logger.ERROR(f'cartesian move to pose: {result.message}')
             return result
         if not self.executor.execute(result.trajectory):
             result.success, result.message = False, 'execution failed'

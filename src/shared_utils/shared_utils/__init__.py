@@ -7,6 +7,8 @@
     filters           LiveLowPass streaming filter
     ros_helpers       spin_in_background, blocking service/action calls
     planning          CumotionClient (isaac_ros_cumotion MotionPlan / IK),
+                      MoveItClient (move_group MoveGroup action, plan-only;
+                      ompl / pilz / chomp / stomp pipelines), both -> PlanResult,
                       CartesianPlanner (MoveIt compute_cartesian_path)
     navigation        NavigatorClient (navigator_cli's navigate / cartesian actions, gripper)
     execution         TrajectoryExecutor (FollowJointTrajectory)

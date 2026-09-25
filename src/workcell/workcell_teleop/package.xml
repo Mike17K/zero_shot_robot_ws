@@ -23,6 +23,7 @@
   <depend>group_a_bringup</depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <!-- Not a hard build dependency (joint_limits.yaml is read from its share
        dir at RUNTIME via ament_index, not imported), but this is what has
        to actually be installed for the default joint_limits_package param

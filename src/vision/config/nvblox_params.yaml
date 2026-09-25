@@ -2,15 +2,23 @@
   nvblox_node:
     ros__parameters:
       # ── Frames ────────────────────────────────────────────────────────────────
-      # For a static arm: global_frame = world (fixed, shared across all robots)
-      # body_frame = the robot's base link in the TF tree
-      # These will be remapped per-robot in the launch file via ros remappings
-      global_frame: "world"
-      body_frame: "world" # arm is fixed, not mobile
+      # Map in the robot's own base frame, NOT world: cuMotion requests the
+      # ESDF in its kinematic base frame (gp_base_link, from the XRDF) and
+      # nvblox refuses ("Requested EsdfAndGradients in gp_base_link frame but
+      # nvblox is mapping in world frame. Sending empty grid.") any frame
+      # other than global_frame. The arm is fixed, so gp_base_link is just as
+      # static as world. Looked up on the robot's own /<ns>/tf tree
+      # (nvblox.launch.py remaps /tf to it via robot_namespace:=<ns>).
+      global_frame: "gp_base_link"
+      body_frame: "gp_base_link" # arm is fixed, not mobile
 
       # ── Core settings ─────────────────────────────────────────────────────────
       cuda_stream_type: 1
-      voxel_size: 0.01
+      # VRAM: 4cm voxels - cuMotion's fixed ESDF box (grid_size_m) is ~0.72M
+      # voxels (~11.5MB) per plan call vs ~5.7M at 2cm / ~46M at 1cm. Cost:
+      # obstacles read ~truncation band fatter, so near-contact (pick/place)
+      # goals need ESDF clearing around the target or a standoff pose.
+      voxel_size: 0.04
       num_cameras: 1
       use_tf_transforms: true
       # "static_occupancy" | "static_tsdf" 
@@ -21,7 +29,7 @@
       integrate_depth_rate_hz: 40.0
       integrate_color_rate_hz: 5.0
       integrate_lidar_rate_hz: 40.0
-      update_mesh_rate_hz: 5.0
+      update_mesh_rate_hz: 2.0 # visualization only
       update_esdf_rate_hz: 10.0
       publish_layer_rate_hz: 5.0
       publish_debug_vis_rate_hz: 2.0
@@ -32,10 +40,10 @@
       static_occupancy_publication_rate_hz: 5.0
 
       # ── Console output ────────────────────────────────────────────────────────
-      print_rates_to_console: false
+      print_rates_to_console: true # DEBUG: set back to false once integration works
       print_timings_to_console: false
-      print_delays_to_console: false
-      print_queue_drops_to_console: false
+      print_delays_to_console: true # DEBUG
+      print_queue_drops_to_console: true # DEBUG
       print_statistics_on_console_period_ms: 10000
 
       # ── ESDF ─────────────────────────────────────────────────────────────────
@@ -44,32 +52,32 @@
       publish_esdf_distance_slice: false # not useful in 3d arm context
 
       # ── Sensor usage ──────────────────────────────────────────────────────────
-      use_color: true
+      use_color: false # VRAM: no color layer / color image uploads (planning only needs geometry)
       use_depth: true
       use_lidar: false
 
       # ── Input queues ──────────────────────────────────────────────────────────
-      maximum_input_queue_length: 10
+      maximum_input_queue_length: 3 # VRAM: fewer queued images
 
       # ── Map clearing ──────────────────────────────────────────────────────────
       # Arm workspace is bounded — clear aggressively around the robot
-      map_clearing_radius_m: 10.0
-      map_clearing_frame_id: "world" # fixed frame for static arm
+      map_clearing_radius_m: 3.0 # VRAM: drop blocks beyond the GP70L reach (~2.05m) + margin
+      map_clearing_frame_id: "gp_base_link" # fixed frame for static arm
 
       # ── QoS ───────────────────────────────────────────────────────────────────
       input_qos: "SENSOR_DATA"
 
       # ── Visualization ─────────────────────────────────────────────────────────
-      # All visualization frames anchored to world for a fixed arm
-      esdf_slice_bounds_visualization_attachment_frame_id: "world"
+      # All visualization frames anchored to the (fixed) robot base
+      esdf_slice_bounds_visualization_attachment_frame_id: "gp_base_link"
       esdf_slice_bounds_visualization_side_length: 4.0
-      workspace_height_bounds_visualization_attachment_frame_id: "world"
+      workspace_height_bounds_visualization_attachment_frame_id: "gp_base_link"
       workspace_height_bounds_visualization_side_length: 4.0
       layer_visualization_min_tsdf_weight: 0.1
       layer_visualization_exclusion_height_m: 2.5
       layer_visualization_exclusion_radius_m: 3.0
       layer_visualization_undo_gamma_correction: false
-      max_back_projection_distance: 3.0 # match camera far clip (3.0m)
+      max_back_projection_distance: 2.0 # match projective_integrator_max_integration_distance_m
       back_projection_subsampling: 1
       layer_streamer_bandwidth_limit_mbps: -1.0
 
@@ -83,8 +91,8 @@
         depth_preprocessing_num_dilations: 3
 
         # ── Projective integrator ───────────────────────────────────────────────
-        # Match camera far clip distance (3.0m in your Gazebo sensor)
-        projective_integrator_max_integration_distance_m: 3.0
+        # Below the camera far clip (3.0m): shorter range = fewer blocks
+        projective_integrator_max_integration_distance_m: 2.0 # VRAM: fewer allocated blocks; a down-facing tool camera rarely needs >2m
         projective_integrator_truncation_distance_vox: 4.0
         projective_integrator_weighting_mode: "inverse_square_tsdf_distance_penalty"
         projective_integrator_max_weight: 5.0
@@ -99,19 +107,23 @@
         # ── View calculator ─────────────────────────────────────────────────────
         raycast_subsampling_factor: 4
         # Bound the workspace to the arm's reachable volume
-        # Adjust these to match your UR10 reach envelope
-        workspace_bounds_type: "height_bounds"
-        workspace_bounds_min_corner_x_m: 0.0 # unused in height_bounds mode
-        workspace_bounds_min_corner_y_m: 0.0
-        workspace_bounds_min_height_m: -0.1 # just below floor mount
-        workspace_bounds_max_corner_x_m: 0.0
-        workspace_bounds_max_corner_y_m: 0.0
-        workspace_bounds_max_height_m: 1.5 # ur10 max reach from floor mount
+        # Heights are in global_frame (gp_base_link), which sits 0.4m above the
+        # floor on the pedestal (workcell_bringup/layout.py) - floor is z=-0.4.
+        # VRAM: bounding_box (not height_bounds) so nvblox never allocates
+        # blocks outside the arm's reach in x/y either. Matches cuMotion's
+        # ESDF query box (cumotion_params.yaml grid_center_m/grid_size_m).
+        workspace_bounds_type: "bounding_box"
+        workspace_bounds_min_corner_x_m: -2.1
+        workspace_bounds_min_corner_y_m: -2.1
+        workspace_bounds_min_height_m: -0.45 # just below the floor
+        workspace_bounds_max_corner_x_m: 2.1
+        workspace_bounds_max_corner_y_m: 2.1
+        workspace_bounds_max_height_m: 2.15 # GP70L reach (~2.0m) above its base
 
         # ── ESDF integrator ─────────────────────────────────────────────────────
         esdf_integrator_min_weight: 0.1
-        esdf_integrator_max_site_distance_vox: 2.0
-        esdf_integrator_max_distance_m: 2.0
+        esdf_integrator_max_site_distance_vox: 1.5 # less inflation at 4cm voxels
+        esdf_integrator_max_distance_m: 1.0 # cuMotion only needs near-obstacle distances
 
         # ── Mesh integrator ─────────────────────────────────────────────────────
         mesh_integrator_min_weight: 0.1
