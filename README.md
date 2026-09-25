@@ -6,6 +6,12 @@ ROS 2 (Jazzy) workspace for zero-shot manipulation on a floor-mounted Yaskawa GP
 
 All development happens inside a container built via the [Isaac ROS CLI](https://nvidia-isaac-ros.github.io/concepts/dev_env/index.html) — there is no host ROS install. Design rationale (why nvblox runs in static TSDF mode, why the workspace lives inside the container) is in [docs/STRUCTURAL_DESISIONS.md](docs/STRUCTURAL_DESISIONS.md).
 
+## Demo
+
+[![Zero-shot box picking demo](https://img.youtube.com/vi/ci6Ym74iDj0/hqdefault.jpg)](https://youtu.be/ci6Ym74iDj0)
+
+Zero-shot pick and place, running on its own: MobileSAM finds the box tops in the wrist camera, the arm aligns over the biggest box, a force sensor on the gripper face stops the approach on contact, and the box goes to one of three conveyors. How the vision works: [docs/VISION.md](docs/VISION.md).
+
 <img src="docs/robots_setup.png">
 
 The cell: a GP70L on a pedestal between two long pallet-queue conveyors and a shorter middle lane (`pallet_left`/`pallet_right`/`pallet_mid`), plus a raised `package_infeed` belt for loose items — see `src/robots/conveyor` and `src/workcell/workcell_bringup/workcell_bringup/layout.py` for the actual dimensions/clearances. A box factory (`src/robots/box_factory`) drops random boxes onto the far end of the infeed, and a laser beam near the robot end stops the line while a box waits to be picked (`workcell_bringup/launch/infeed_line.launch.py`).
