@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer='kaipis',
     maintainer_email='kaipismike1@gmail.com',
-    description='Reusable ROS 2 helpers and the cuMotion planning client',
+    description='Reusable ROS 2 helpers and the cuMotion / MoveIt planning clients',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={

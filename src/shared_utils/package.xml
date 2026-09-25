@@ -3,7 +3,7 @@
 <package format="3">
   <name>shared_utils</name>
   <version>0.1.0</version>
-  <description>Reusable ROS 2 helpers: geometry/TF, joint states, trajectories, bag I/O, the cuMotion planning client and a trajectory executor</description>
+  <description>Reusable ROS 2 helpers: geometry/TF, joint states, trajectories, bag I/O, the cuMotion and MoveIt planning clients and a trajectory executor</description>
   <maintainer email="kaipismike1@gmail.com">kaipis</maintainer>
   <license>Apache-2.0</license>
 
@@ -14,6 +14,7 @@
   <exec_depend>trajectory_msgs</exec_depend>
   <exec_depend>control_msgs</exec_depend>
   <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>
   <exec_depend>rosbag2_py</exec_depend>
